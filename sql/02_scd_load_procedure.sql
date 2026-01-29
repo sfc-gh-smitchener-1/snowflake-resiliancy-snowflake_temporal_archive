@@ -38,13 +38,21 @@ WORM Backup:
 
 RUN AS: DATA_ADMIN (owner of all Temporal Archive objects)
 
+BEFORE RUNNING THIS SCRIPT, execute these commands in your worksheet:
+    USE ROLE DATA_ADMIN;
+    USE DATABASE TEMPORAL_ARCHIVE;
+    USE SCHEMA ARCHIVE;
+    USE WAREHOUSE TEMPORAL_ARCHIVE_WH;
+
 ================================================================================
 */
 
-USE ROLE DATA_ADMIN;
-USE DATABASE TEMPORAL_ARCHIVE;
-USE SCHEMA ARCHIVE;
-USE WAREHOUSE TEMPORAL_ARCHIVE_WH;
+-- *** IMPORTANT: Run these USE statements BEFORE executing this script ***
+-- *** If using Git integration or Execute Immediate, run separately first ***
+-- USE ROLE DATA_ADMIN;
+-- USE DATABASE TEMPORAL_ARCHIVE;
+-- USE SCHEMA ARCHIVE;
+-- USE WAREHOUSE TEMPORAL_ARCHIVE_WH;
 
 
 -- =============================================================================
