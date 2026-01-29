@@ -149,6 +149,16 @@ GRANT ROLE TEMPORAL_ARCHIVE_WRITER TO ROLE TEMPORAL_ARCHIVE_ADMIN;
 
 
 -- =============================================================================
+-- GRANT ALL ROLES TO USER STEVE (for demo purposes)
+-- =============================================================================
+
+GRANT ROLE DATA_ADMIN TO USER STEVE;
+GRANT ROLE TEMPORAL_ARCHIVE_ADMIN TO USER STEVE;
+GRANT ROLE TEMPORAL_ARCHIVE_WRITER TO USER STEVE;
+GRANT ROLE TEMPORAL_ARCHIVE_READER TO USER STEVE;
+
+
+-- =============================================================================
 -- SECTION 2: SWITCH TO DATA_ADMIN
 -- All subsequent objects will be owned by DATA_ADMIN
 -- =============================================================================
@@ -285,6 +295,8 @@ SELECT '01_initial_setup.sql completed successfully' AS STATUS;
 │   PRIVILEGES:       • Owns TEMPORAL_ARCHIVE_WH warehouse                        │
 │                     • IMPORTED PRIVILEGES on SNOWFLAKE database                 │
 │                     • EXECUTE TASK on account                                   │
+│                                                                                 │
+│   USER GRANTS:      User STEVE granted all roles for demo                       │
 │                                                                                 │
 │   Reference: https://docs.snowflake.com/en/user-guide/backups                   │
 └─────────────────────────────────────────────────────────────────────────────────┘
