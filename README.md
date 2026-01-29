@@ -28,23 +28,23 @@ All operations run **natively within Snowflake** - no external orchestration req
 │   06:00 AM ─────────┐                                                               │
 │                     ▼                                                               │
 │              ┌─────────────┐     ┌─────────────────────────────────────────────┐    │
-│              │ SCD LOAD #1 │────▶│ Load from Snowflake.* views → Archive      │    │
+│              │ SCD LOAD #1 │────▶│ Load from Snowflake.* views → Archive       │    │
 │              └─────────────┘     └─────────────────────────────────────────────┘    │
 │                                                                                     │
 │   06:00 PM ─────────┐                                                               │
 │                     ▼                                                               │
 │              ┌─────────────┐     ┌─────────────────────────────────────────────┐    │
-│              │ SCD LOAD #2 │────▶│ Load from Snowflake.* views → Archive      │    │
+│              │ SCD LOAD #2 │────▶│ Load from Snowflake.* views → Archive       │    │
 │              └─────────────┘     └─────────────────────────────────────────────┘    │
 │                                                                                     │
 │   Daily ────────────┐                                                               │
 │                     ▼                                                               │
 │              ┌─────────────┐     ┌─────────────────────────────────────────────┐    │
-│              │ WORM BACKUP │────▶│ Snowflake Backup Policy (RETENTION LOCK)   │    │
-│              │   POLICY    │     │ • Immutable (cannot be deleted by anyone)  │    │
-│              └─────────────┘     │ • 7-year retention (2555 days)             │    │
-│                                  │ Ref: docs.snowflake.com/en/user-guide/     │    │
-│                                  │      backups                               │    │
+│              │ WORM BACKUP │────▶│ Snowflake Backup Policy (RETENTION LOCK)    │    │
+│              │   POLICY    │     │ • Immutable (cannot be deleted by anyone)   │    │
+│              └─────────────┘     │ • 7-year retention (2555 days)              │    │
+│                                  │ Ref: docs.snowflake.com/en/user-guide/      │    │
+│                                  │      backups                                │    │
 │                                  └─────────────────────────────────────────────┘    │
 │                                                                                     │
 └─────────────────────────────────────────────────────────────────────────────────────┘
@@ -480,26 +480,26 @@ ORDER BY month DESC;
 │  │  • DATA_SHARING  │    │  • CDC Detection │    │  • _VALID_FROM / _VALID_TO       │  │
 │  │  • READER_USAGE  │    │                  │    │                                  │  │
 │  └──────────────────┘    └──────────────────┘    └──────────────────────────────────┘  │
-│                                                               │                         │
-│                                                               ▼                         │
-│                                    ┌──────────────────────────────────────────────┐    │
-│                                    │       SNOWFLAKE BACKUP POLICY                │    │
-│                                    │       (WORM Compliance)                      │    │
-│                                    │                                              │    │
-│                                    │  • WITH RETENTION LOCK                       │    │
-│                                    │  • Daily backups (1440 minutes)              │    │
-│                                    │  • 7-year retention (2555 days)              │    │
-│                                    │  • Immutable - cannot be deleted             │    │
-│                                    │  • Requires Business Critical Edition        │    │
-│                                    │                                              │    │
-│                                    │  Ref: docs.snowflake.com/en/user-guide/      │    │
-│                                    │       backups                                │    │
-│                                    └──────────────────────────────────────────────┘    │
-│                                                               │                         │
-│                                                               ▼                         │
+│                         _______________________________│       │                       │
+│                        │                                       ▼                       │
+│                        │            ┌──────────────────────────────────────────────┐   │
+│                        │            │       SNOWFLAKE BACKUP POLICY                │   │
+│                        │            │       (WORM Compliance)                      │   │
+│                        │            │                                              │   │
+│                        │            │  • WITH RETENTION LOCK                       │   │
+│                        │            │  • Daily backups (1440 minutes)              │   │
+│                        │            │  • 7-year retention (2555 days)              │   │
+│                        │            │  • Immutable - cannot be deleted             │   │
+│                        │            │  • Requires Business Critical Edition        │   │
+│                        |            │                                              │   │
+│                        |            │  Ref: docs.snowflake.com/en/user-guide/      │   │
+│                        |            │       backups                                │   │
+│                        |            └──────────────────────────────────────────────┘   │
+│                        |                                                               │
+│                        ▼                                                               │
 │  ┌──────────────────────────────────────────────────────────────────────────────────┐  │
-│  │                           SEMANTIC & ANALYTICS LAYER                              │  │
-│  │                                                                                   │  │
+│  │                           SEMANTIC & ANALYTICS LAYER                             │  │
+│  │                                                                                  │  │
 │  │  ┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────────┐   │  │
 │  │  │  Semantic Models    │  │  Agent Research     │  │  Usage Analytics        │   │  │
 │  │  │                     │  │                     │  │                         │   │  │
@@ -509,8 +509,8 @@ ORDER BY month DESC;
 │  │  │  • Context Layer    │  │  • Compliance Audit │  │  • Deep Data Insights   │   │  │
 │  │  └─────────────────────┘  └─────────────────────┘  └─────────────────────────┘   │  │
 │  └──────────────────────────────────────────────────────────────────────────────────┘  │
-│                                                                                         │
-└─────────────────────────────────────────────────────────────────────────────────────────┘
+│                                                                                        │
+└────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### SCD Type 2 Processing Flow
@@ -634,103 +634,83 @@ snowflake-temporal-archive/
 ├── README.md                              # Project overview, architecture, and AI context
 │
 ├── sql/
-│   ├── ddl/
-│   │   └── 01_initial_setup.sql           # Database, schemas, warehouse, backup policy
-│   ├── procedures/
-│   │   └── scd_load_procedure.sql         # RUN_SCD_LOAD() procedure + Tasks
-│   ├── backup/
-│   │   └── worm_backup.sql                # Backup policy documentation
-│   └── analytics/
-│       ├── usage-analysis/                # Usage pattern queries
-│       └── compliance-reports/            # WORM compliance reporting
+│   ├── 00_deploy_all.sql                  # ★ MASTER: Deployment orchestrator
+│   ├── 01_initial_setup.sql               # Database, schemas, warehouse, backup policy
+│   ├── 02_scd_load_procedure.sql          # SCD Type 2 procedures + Tasks (6 AM, 6 PM)
+│   ├── 03_semantic_layer.sql              # Semantic views for Cortex Analyst
+│   ├── 04_streamlit_ddl.sql               # Streamlit support objects (views, procedures)
+│   └── 05_streamlit_app.sql               # Streamlit application deployment
 │
-├── docs/
-│   ├── architecture/
-│   │   ├── overview.md                    # Detailed architecture documentation
-│   │   ├── scd-type2-patterns.md          # SCD implementation patterns
-│   │   └── worm-compliance.md             # WORM backup policy strategies
-│   ├── semantic-models/
-│   │   ├── entity-definitions.md          # Semantic entity specifications
-│   │   ├── relationship-graphs.md         # Entity relationship documentation
-│   │   └── agent-context.md               # AI agent context layer specs
-│   └── analytics/
-│       ├── usage-patterns.md              # Historical usage analysis docs
-│       └── research-queries.md            # Research query templates
+├── src/
+│   └── app.py                             # Streamlit application (Cortex AI enabled)
 │
-└── semantic/
-    ├── models/                            # Semantic model definitions
-    ├── embeddings/                        # Vector embedding configs
-    └── agents/                            # Agent research configurations
+└── docs/                                  # Documentation (optional)
 ```
 
 ---
 
-## Quick Start
+## Quick Start - Full Deployment
 
-### 1. Run Initial Setup
+### Role Structure
+
+| Role | Purpose | Runs |
+|------|---------|------|
+| **ACCOUNTADMIN** | One-time setup only | `01_initial_setup.sql` |
+| **DATA_ADMIN** | Owner of all objects | `02-05` scripts, daily operations |
+| TEMPORAL_ARCHIVE_ADMIN | Full access to archive | Delegated by DATA_ADMIN |
+| TEMPORAL_ARCHIVE_WRITER | SCD load operations | Task execution |
+| TEMPORAL_ARCHIVE_READER | Read-only access | Analysts, AI agents |
+
+### Deployment Steps
 
 ```sql
--- Execute the setup script in Snowflake
--- Reference: https://docs.snowflake.com/en/user-guide/backups
--- NOTE: Requires Business Critical Edition for RETENTION LOCK
-
+-- ═══════════════════════════════════════════════════════════════════════════
+-- STEP 1: Run as ACCOUNTADMIN (one-time setup)
+-- Creates DATA_ADMIN role and grants necessary privileges
+-- ═══════════════════════════════════════════════════════════════════════════
 USE ROLE ACCOUNTADMIN;
+!source sql/01_initial_setup.sql
 
--- Run the setup file (includes backup policy creation)
-!source sql/ddl/01_initial_setup.sql
+-- ═══════════════════════════════════════════════════════════════════════════
+-- STEPS 2-5: Run as DATA_ADMIN (owns all objects)
+-- ═══════════════════════════════════════════════════════════════════════════
+USE ROLE DATA_ADMIN;
+
+-- Step 2: SCD load procedures and Tasks
+!source sql/02_scd_load_procedure.sql
+
+-- Step 3: Semantic layer for Cortex Analyst
+!source sql/03_semantic_layer.sql
+
+-- Step 4: Streamlit support objects
+!source sql/04_streamlit_ddl.sql
+
+-- Step 5: Upload Streamlit app and deploy
+PUT file://src/app.py @TEMPORAL_ARCHIVE.STREAMLIT.STREAMLIT_STAGE AUTO_COMPRESS=FALSE OVERWRITE=TRUE;
+!source sql/05_streamlit_app.sql
+
+-- Step 6: Build semantic views
+CALL TEMPORAL_ARCHIVE.SEMANTIC.BUILD_SEMANTIC_LAYER();
+
+-- Step 7: Initial SCD load
+CALL TEMPORAL_ARCHIVE.ARCHIVE.RUN_SCD_LOAD();
 ```
 
-**Or run manually:**
-
-```sql
--- Create database
-CREATE DATABASE IF NOT EXISTS TEMPORAL_ARCHIVE;
-
--- Create schemas
-CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE;
-CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.ACCOUNT_USAGE;
-CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.ORGANIZATION_USAGE;
-CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.DATA_SHARING_USAGE;
-
--- Create warehouse
-CREATE WAREHOUSE IF NOT EXISTS TEMPORAL_ARCHIVE_WH
-    WAREHOUSE_SIZE = 'XSMALL'
-    AUTO_SUSPEND = 60
-    AUTO_RESUME = TRUE;
-
--- Create WORM backup policy (requires Business Critical Edition)
-CREATE BACKUP POLICY TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY
-    WITH RETENTION LOCK
-    SCHEDULE = '1440 MINUTE'
-    EXPIRE_AFTER_DAYS = 2555
-    COMMENT = 'WORM-compliant daily backups with 7-year retention';
-
--- Apply backup policy to database
-ALTER DATABASE TEMPORAL_ARCHIVE
-    SET BACKUP POLICY = TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY;
-```
-
-### 2. Deploy SCD Load Procedures and Tasks
-
-```sql
--- Deploy the SCD load procedure and scheduled tasks
-!source sql/procedures/scd_load_procedure.sql
-```
-
-### 3. Verify Setup
+### Verify Deployment
 
 ```sql
 -- Check backup policy
 DESCRIBE BACKUP POLICY TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY;
 
--- Verify policy is applied
-SHOW DATABASES LIKE 'TEMPORAL_ARCHIVE';
-
--- Check task status
+-- Verify Tasks are running
 SHOW TASKS IN SCHEMA TEMPORAL_ARCHIVE.ARCHIVE;
 
--- Manual test run
-CALL TEMPORAL_ARCHIVE.ARCHIVE.RUN_SCD_LOAD();
+-- Check semantic views
+SELECT * FROM TEMPORAL_ARCHIVE.SEMANTIC.V_SEMANTIC_CONFIG_SUMMARY;
+
+-- Launch Streamlit app
+SHOW STREAMLITS IN SCHEMA TEMPORAL_ARCHIVE.STREAMLIT;
+-- Navigate to: Snowsight > Projects > Streamlit > TEMPORAL_ARCHIVE_APP
 ```
 
 ### Operations Schedule

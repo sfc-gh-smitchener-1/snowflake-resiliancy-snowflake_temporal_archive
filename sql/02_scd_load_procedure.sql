@@ -36,10 +36,12 @@ WORM Backup:
     • Daily backups retained for 7 years (2555 days)
     • Requires Business Critical Edition
 
+RUN AS: DATA_ADMIN (owner of all Temporal Archive objects)
+
 ================================================================================
 */
 
-USE ROLE ACCOUNTADMIN;
+USE ROLE DATA_ADMIN;
 USE DATABASE TEMPORAL_ARCHIVE;
 USE SCHEMA ARCHIVE;
 USE WAREHOUSE TEMPORAL_ARCHIVE_WH;
