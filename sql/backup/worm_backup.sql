@@ -14,6 +14,15 @@ WORM Compliance:
     • Requires Business Critical Edition or higher
     • Meets regulatory requirements for immutable data retention
 
+SCD Metadata Columns (appended to ALL archive tables):
+    _LOADED_AT          TIMESTAMP_NTZ   - When record was loaded
+    _SOURCE_SYSTEM      VARCHAR(100)    - Source system identifier
+    _SOURCE_TABLE       VARCHAR(100)    - Original source table name
+    _ROW_HASH           VARCHAR(64)     - SHA-256 hash for change detection
+    _IS_CURRENT         BOOLEAN         - Current version flag
+    _VALID_FROM         TIMESTAMP_NTZ   - Version start timestamp
+    _VALID_TO           VARCHAR(50)     - Version end timestamp
+
 Schedule:
     • Daily backups (every 1440 minutes = 24 hours)
     • Retained for 7 years (2555 days)

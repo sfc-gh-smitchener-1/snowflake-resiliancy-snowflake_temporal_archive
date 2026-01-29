@@ -22,13 +22,6 @@ SCD Metadata Columns (appended to ALL rows):
     _IS_CURRENT         BOOLEAN         - Current version flag
     _VALID_FROM         TIMESTAMP_NTZ   - Version start timestamp
     _VALID_TO           VARCHAR(50)     - Version end timestamp
-    Id                  VARCHAR(18)     - Primary identifier
-    IsDeleted           BOOLEAN         - Soft delete flag
-    CreatedDate         VARCHAR(50)     - Original creation timestamp
-    CreatedById         VARCHAR(18)     - Creator user ID
-    LastModifiedDate    VARCHAR(50)     - Last modification timestamp
-    LastModifiedById    VARCHAR(18)     - Last modifier user ID
-    SystemModstamp      VARCHAR(50)     - System modification timestamp
 
 Schedule:
     ┌─────────────────────────────────────────────────────────────────────────┐
@@ -76,14 +69,7 @@ CREATE TABLE IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE.TABLE_REGISTRY (
     "_ROW_HASH"             VARCHAR(64),
     "_IS_CURRENT"           BOOLEAN DEFAULT TRUE,
     "_VALID_FROM"           TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
-    "_VALID_TO"             VARCHAR(50) DEFAULT '9999-12-31 23:59:59',
-    "Id"                    VARCHAR(18),
-    "IsDeleted"             BOOLEAN DEFAULT FALSE,
-    "CreatedDate"           VARCHAR(50),
-    "CreatedById"           VARCHAR(18),
-    "LastModifiedDate"      VARCHAR(50),
-    "LastModifiedById"      VARCHAR(18),
-    "SystemModstamp"        VARCHAR(50)
+    "_VALID_TO"             VARCHAR(50) DEFAULT '9999-12-31 23:59:59'
 )
 COMMENT = 'Registry of tables to archive via SCD Type 2. Ref: https://docs.snowflake.com/en/user-guide/backups';
 
@@ -140,8 +126,7 @@ DECLARE
         WHERE TABLE_SCHEMA = p_source_schema
           AND TABLE_NAME = p_source_view
           AND COLUMN_NAME NOT IN ('_LOADED_AT', '_SOURCE_SYSTEM', '_SOURCE_TABLE', '_ROW_HASH', 
-                                  '_IS_CURRENT', '_VALID_FROM', '_VALID_TO', 'Id', 'IsDeleted',
-                                  'CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById', 'SystemModstamp')
+                                  '_IS_CURRENT', '_VALID_FROM', '_VALID_TO')
         ORDER BY ORDINAL_POSITION;
 BEGIN
     FOR col IN col_cursor DO
@@ -278,14 +263,7 @@ BEGIN
             "_ROW_HASH",
             "_IS_CURRENT",
             "_VALID_FROM",
-            "_VALID_TO",
-            "Id",
-            "IsDeleted",
-            "CreatedDate",
-            "CreatedById",
-            "LastModifiedDate",
-            "LastModifiedById",
-            "SystemModstamp"
+            "_VALID_TO"
         )
         SELECT 
             ' || source_columns || ',
@@ -295,14 +273,7 @@ BEGIN
             ' || hash_expr || ',
             TRUE,
             CURRENT_TIMESTAMP()::TIMESTAMP_NTZ,
-            ''9999-12-31 23:59:59'',
-            NULL,
-            FALSE,
-            CURRENT_TIMESTAMP()::VARCHAR,
-            NULL,
-            CURRENT_TIMESTAMP()::VARCHAR,
-            NULL,
-            CURRENT_TIMESTAMP()::VARCHAR
+            ''9999-12-31 23:59:59''
         FROM ' || source_fqn || ' src
         WHERE NOT EXISTS (
             SELECT 1 FROM ' || target_fqn || ' tgt

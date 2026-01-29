@@ -57,6 +57,411 @@ All implementations reference the official Snowflake backup documentation:
 
 ---
 
+## The Strategic Value of ACCOUNT_USAGE Historical Data
+
+### Why Archive ACCOUNT_USAGE?
+
+The `SNOWFLAKE.ACCOUNT_USAGE` schema is a goldmine of operational intelligence, but **Snowflake only retains this data for 1 year**. After 365 days, critical insights into your platform's history are permanently lost. The Temporal Archive solves this by preserving the complete history indefinitely with WORM-compliant immutability.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                    THE ACCOUNT_USAGE RETENTION PROBLEM                              │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                     │
+│   SNOWFLAKE NATIVE                          TEMPORAL ARCHIVE                        │
+│   ┌─────────────────────┐                   ┌─────────────────────┐                 │
+│   │                     │                   │                     │                 │
+│   │   365 DAYS ONLY     │      ────▶        │   7+ YEARS          │                 │
+│   │                     │                   │                     │                 │
+│   │   Then data is      │                   │   WORM-compliant    │                 │
+│   │   PERMANENTLY LOST  │                   │   immutable history │                 │
+│   │                     │                   │                     │                 │
+│   └─────────────────────┘                   └─────────────────────┘                 │
+│                                                                                     │
+│   ❌ Cannot analyze multi-year trends       ✓ Full historical analysis              │
+│   ❌ No audit trail for compliance          ✓ Complete audit trail                  │
+│   ❌ Lost cost optimization insights        ✓ Deep cost pattern mining              │
+│   ❌ Cannot prove historical access         ✓ Immutable access records              │
+│                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Business Value Categories
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                         ACCOUNT_USAGE BUSINESS VALUE                                │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                     │
+│   ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐                   │
+│   │  COST           │   │  TRANSPARENCY   │   │  COMPLIANCE     │                   │
+│   │  OPTIMIZATION   │   │  & GOVERNANCE   │   │  & AUDIT        │                   │
+│   │                 │   │                 │   │                 │                   │
+│   │  Save money     │   │  Full visibility│   │  Regulatory     │                   │
+│   │  through data-  │   │  into platform  │   │  requirements   │                   │
+│   │  driven insight │   │  operations     │   │  met with proof │                   │
+│   └─────────────────┘   └─────────────────┘   └─────────────────┘                   │
+│           │                     │                     │                             │
+│           ▼                     ▼                     ▼                             │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │                    SEMANTIC LAYER & AI AGENTS                               │   │
+│   │                                                                             │   │
+│   │  • Natural language queries on historical data                              │   │
+│   │  • Automated anomaly detection and alerting                                 │   │
+│   │  • Predictive cost forecasting                                              │   │
+│   │  • Compliance report generation                                             │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Cost Optimization Use Cases
+
+Historical ACCOUNT_USAGE data enables powerful cost analysis that can deliver **significant savings**:
+
+### 1. Warehouse Right-Sizing Analysis
+
+Identify over-provisioned warehouses by analyzing historical utilization patterns.
+
+```sql
+-- Example: Find warehouses consistently under-utilized over 2+ years
+-- Potential savings: 20-40% reduction in compute costs
+
+SELECT 
+    WAREHOUSE_NAME,
+    DATE_TRUNC('month', START_TIME) AS month,
+    AVG(AVG_RUNNING) AS avg_concurrent_queries,
+    AVG(AVG_QUEUED_LOAD) AS avg_queue_depth,
+    SUM(CREDITS_USED) AS monthly_credits,
+    -- Flag for right-sizing recommendation
+    CASE 
+        WHEN AVG(AVG_RUNNING) < 2 AND AVG(AVG_QUEUED_LOAD) < 0.1 
+        THEN 'DOWNSIZE CANDIDATE'
+        WHEN AVG(AVG_QUEUED_LOAD) > 1 
+        THEN 'UPSIZE OR MULTI-CLUSTER'
+        ELSE 'APPROPRIATELY SIZED'
+    END AS recommendation
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.WAREHOUSE_LOAD_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+GROUP BY WAREHOUSE_NAME, DATE_TRUNC('month', START_TIME)
+ORDER BY monthly_credits DESC;
+```
+
+### 2. Query Cost Attribution Over Time
+
+Track which teams, users, or applications drive costs across years - not just months.
+
+```sql
+-- Example: Multi-year cost attribution by user/role
+-- Use case: Chargeback models, budget planning, identifying cost trends
+
+SELECT 
+    USER_NAME,
+    ROLE_NAME,
+    DATE_TRUNC('quarter', START_TIME) AS quarter,
+    COUNT(*) AS query_count,
+    SUM(TOTAL_ELAPSED_TIME) / 1000 / 60 AS total_minutes,
+    SUM(CREDITS_USED_CLOUD_SERVICES) AS cloud_credits,
+    -- Year-over-year comparison
+    LAG(SUM(CREDITS_USED_CLOUD_SERVICES)) OVER (
+        PARTITION BY USER_NAME ORDER BY DATE_TRUNC('quarter', START_TIME)
+    ) AS prev_quarter_credits,
+    ROUND(
+        (SUM(CREDITS_USED_CLOUD_SERVICES) - LAG(SUM(CREDITS_USED_CLOUD_SERVICES)) OVER (
+            PARTITION BY USER_NAME ORDER BY DATE_TRUNC('quarter', START_TIME)
+        )) / NULLIF(LAG(SUM(CREDITS_USED_CLOUD_SERVICES)) OVER (
+            PARTITION BY USER_NAME ORDER BY DATE_TRUNC('quarter', START_TIME)
+        ), 0) * 100, 2
+    ) AS quarter_over_quarter_pct_change
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+GROUP BY USER_NAME, ROLE_NAME, DATE_TRUNC('quarter', START_TIME)
+ORDER BY quarter DESC, cloud_credits DESC;
+```
+
+### 3. Storage Growth Forecasting
+
+Predict future storage needs and costs based on multi-year growth patterns.
+
+```sql
+-- Example: Storage growth trend analysis for capacity planning
+-- Use case: Budget forecasting, contract negotiations
+
+SELECT 
+    USAGE_DATE,
+    AVERAGE_STAGE_BYTES / POWER(1024, 4) AS stage_tb,
+    AVERAGE_DATABASE_BYTES / POWER(1024, 4) AS database_tb,
+    AVERAGE_FAILSAFE_BYTES / POWER(1024, 4) AS failsafe_tb,
+    (AVERAGE_STAGE_BYTES + AVERAGE_DATABASE_BYTES + AVERAGE_FAILSAFE_BYTES) 
+        / POWER(1024, 4) AS total_tb,
+    -- Calculate monthly growth rate
+    (total_tb - LAG(total_tb, 30) OVER (ORDER BY USAGE_DATE)) 
+        / NULLIF(LAG(total_tb, 30) OVER (ORDER BY USAGE_DATE), 0) * 100 
+        AS monthly_growth_pct
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.STORAGE_USAGE_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+ORDER BY USAGE_DATE DESC;
+```
+
+---
+
+## Transparency & Governance Use Cases
+
+### 4. User Access Pattern Analysis
+
+Understand how your platform is being used across the organization over time.
+
+```sql
+-- Example: Login pattern analysis for security and governance
+-- Use case: Identify dormant accounts, unusual access patterns, licensing optimization
+
+SELECT 
+    USER_NAME,
+    CLIENT_IP,
+    REPORTED_CLIENT_TYPE,
+    DATE_TRUNC('month', EVENT_TIMESTAMP) AS month,
+    COUNT(*) AS login_count,
+    COUNT(DISTINCT DATE_TRUNC('day', EVENT_TIMESTAMP)) AS active_days,
+    MIN(EVENT_TIMESTAMP) AS first_login,
+    MAX(EVENT_TIMESTAMP) AS last_login,
+    -- Flag potentially dormant users
+    CASE 
+        WHEN MAX(EVENT_TIMESTAMP) < DATEADD('day', -90, CURRENT_TIMESTAMP()) 
+        THEN 'DORMANT - Review for deactivation'
+        ELSE 'ACTIVE'
+    END AS account_status
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.LOGIN_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND IS_SUCCESS = 'YES'
+GROUP BY USER_NAME, CLIENT_IP, REPORTED_CLIENT_TYPE, DATE_TRUNC('month', EVENT_TIMESTAMP)
+ORDER BY month DESC, login_count DESC;
+```
+
+### 5. Role and Privilege Evolution
+
+Track how access controls have changed over time - critical for security reviews.
+
+```sql
+-- Example: Track role hierarchy changes over time
+-- Use case: Security audits, access reviews, privilege creep detection
+
+SELECT 
+    GRANTEE_NAME,
+    ROLE,
+    GRANTED_BY,
+    "_VALID_FROM" AS privilege_granted_at,
+    "_VALID_TO" AS privilege_revoked_at,
+    "_IS_CURRENT" AS currently_active,
+    DATEDIFF('day', "_VALID_FROM", 
+        CASE WHEN "_IS_CURRENT" THEN CURRENT_TIMESTAMP() ELSE "_VALID_TO"::TIMESTAMP END
+    ) AS days_with_privilege
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.GRANTS_TO_ROLES_ARCHIVE
+WHERE GRANTEE_NAME = 'SENSITIVE_DATA_ROLE'
+ORDER BY "_VALID_FROM" DESC;
+```
+
+### 6. Data Access Transparency
+
+See exactly who accessed what data and when - across years, not just the last 365 days.
+
+```sql
+-- Example: Data access audit for specific tables
+-- Use case: Privacy compliance, data governance, breach investigation
+
+SELECT 
+    USER_NAME,
+    ROLE_NAME,
+    QUERY_TEXT,
+    DATABASE_NAME,
+    SCHEMA_NAME,
+    START_TIME,
+    ROWS_PRODUCED,
+    BYTES_SCANNED / POWER(1024, 3) AS gb_scanned
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND QUERY_TEXT ILIKE '%CUSTOMER_PII%'  -- Sensitive table name
+  AND START_TIME BETWEEN '2023-01-01' AND '2025-12-31'
+ORDER BY START_TIME DESC;
+```
+
+---
+
+## Compliance & Audit Use Cases
+
+### 7. Regulatory Compliance Evidence
+
+Provide immutable proof of data handling for regulatory audits (SOX, GDPR, HIPAA, etc.)
+
+```sql
+-- Example: Generate compliance evidence report
+-- Use case: SOX audit, GDPR data access requests, HIPAA audit trails
+
+SELECT 
+    'DATA_ACCESS_AUDIT' AS report_type,
+    USER_NAME,
+    ROLE_NAME,
+    DATABASE_NAME || '.' || SCHEMA_NAME AS data_location,
+    QUERY_TYPE,
+    START_TIME AS access_timestamp,
+    EXECUTION_STATUS,
+    ROWS_PRODUCED AS records_accessed,
+    -- Archive metadata proves immutability
+    "_LOADED_AT" AS archived_at,
+    "_ROW_HASH" AS integrity_hash,
+    "_SOURCE_SYSTEM" AS source
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND DATABASE_NAME IN ('PRODUCTION', 'CUSTOMER_DATA', 'FINANCIAL')
+  AND START_TIME >= DATEADD('year', -7, CURRENT_TIMESTAMP())
+ORDER BY START_TIME DESC;
+```
+
+### 8. Failed Login Security Audit
+
+Investigate security incidents with complete historical context.
+
+```sql
+-- Example: Security incident investigation - failed login analysis
+-- Use case: Breach investigation, security audit, threat detection
+
+SELECT 
+    EVENT_TIMESTAMP,
+    USER_NAME,
+    CLIENT_IP,
+    REPORTED_CLIENT_TYPE,
+    ERROR_CODE,
+    ERROR_MESSAGE,
+    -- Geographic analysis if available
+    FIRST_AUTHENTICATION_FACTOR,
+    SECOND_AUTHENTICATION_FACTOR,
+    -- Count failed attempts in 24-hour window
+    COUNT(*) OVER (
+        PARTITION BY USER_NAME 
+        ORDER BY EVENT_TIMESTAMP 
+        RANGE BETWEEN INTERVAL '24 HOURS' PRECEDING AND CURRENT ROW
+    ) AS failed_attempts_24h
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.LOGIN_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND IS_SUCCESS = 'NO'
+ORDER BY EVENT_TIMESTAMP DESC;
+```
+
+### 9. Change Management Audit Trail
+
+Prove when configuration changes were made and by whom.
+
+```sql
+-- Example: Database and schema change history
+-- Use case: Change management audit, rollback investigation
+
+SELECT 
+    DATABASE_NAME,
+    DATABASE_OWNER,
+    CREATED AS originally_created,
+    "_VALID_FROM" AS this_version_from,
+    "_VALID_TO" AS this_version_to,
+    "_IS_CURRENT" AS is_current_state,
+    COMMENT,
+    OPTIONS
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.DATABASES_ARCHIVE
+WHERE DATABASE_NAME = 'PRODUCTION_DB'
+ORDER BY "_VALID_FROM" DESC;
+```
+
+---
+
+## Semantic Layer & AI Agent Applications
+
+The Temporal Archive is designed to power **AI agents and semantic analysis** for automated insights:
+
+### 10. Natural Language Querying
+
+AI agents can query historical data using natural language:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                    AI AGENT INTERACTION EXAMPLES                                    │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                     │
+│   USER: "What was our warehouse spending trend over the last 3 years?"              │
+│                                                                                     │
+│   AGENT: Analyzes WAREHOUSE_METERING_HISTORY_ARCHIVE                                │
+│          → Generates trend visualization                                            │
+│          → Identifies seasonal patterns                                             │
+│          → Recommends optimization opportunities                                    │
+│                                                                                     │
+│   ─────────────────────────────────────────────────────────────────────────────     │
+│                                                                                     │
+│   USER: "Who accessed the CUSTOMER_DATA schema in Q4 2024?"                         │
+│                                                                                     │
+│   AGENT: Queries QUERY_HISTORY_ARCHIVE                                              │
+│          → Returns complete access list                                             │
+│          → Groups by user and role                                                  │
+│          → Flags unusual access patterns                                            │
+│                                                                                     │
+│   ─────────────────────────────────────────────────────────────────────────────     │
+│                                                                                     │
+│   USER: "Generate a SOX compliance report for the last fiscal year"                 │
+│                                                                                     │
+│   AGENT: Combines multiple ARCHIVE tables                                           │
+│          → Generates formatted compliance report                                    │
+│          → Includes immutability attestation                                        │
+│          → Provides hash verification for audit                                     │
+│                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 11. Anomaly Detection & Alerting
+
+Historical baselines enable automated anomaly detection:
+
+```sql
+-- Example: Detect anomalous query patterns using historical baselines
+-- Use case: Security monitoring, cost spike detection
+
+WITH monthly_baselines AS (
+    SELECT 
+        USER_NAME,
+        DATE_TRUNC('month', START_TIME) AS month,
+        COUNT(*) AS query_count,
+        SUM(BYTES_SCANNED) AS total_bytes,
+        AVG(COUNT(*)) OVER (PARTITION BY USER_NAME ORDER BY month ROWS BETWEEN 12 PRECEDING AND 1 PRECEDING) AS avg_query_count_12mo,
+        STDDEV(COUNT(*)) OVER (PARTITION BY USER_NAME ORDER BY month ROWS BETWEEN 12 PRECEDING AND 1 PRECEDING) AS stddev_query_count_12mo
+    FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE
+    WHERE "_IS_CURRENT" = TRUE
+    GROUP BY USER_NAME, DATE_TRUNC('month', START_TIME)
+)
+SELECT 
+    *,
+    CASE 
+        WHEN query_count > avg_query_count_12mo + (3 * stddev_query_count_12mo)
+        THEN 'ANOMALY: Significantly higher than historical average'
+        WHEN query_count < avg_query_count_12mo - (3 * stddev_query_count_12mo)
+        THEN 'ANOMALY: Significantly lower than historical average'
+        ELSE 'NORMAL'
+    END AS anomaly_flag
+FROM monthly_baselines
+WHERE anomaly_flag != 'NORMAL'
+ORDER BY month DESC;
+```
+
+---
+
+## Summary: The Value Proposition
+
+| Category | Without Temporal Archive | With Temporal Archive |
+|----------|--------------------------|----------------------|
+| **Data Retention** | 1 year (Snowflake limit) | 7+ years (configurable) |
+| **Cost Analysis** | Limited trend visibility | Multi-year optimization insights |
+| **Compliance** | Cannot prove historical access | Immutable WORM audit trail |
+| **Security Audit** | Gaps in investigation capability | Complete forensic history |
+| **AI/ML Ready** | Insufficient training data | Rich historical dataset |
+| **Governance** | Point-in-time snapshots only | Full temporal evolution |
+
+---
+
 ## Architecture
 
 ### High-Level Data Flow
@@ -196,13 +601,6 @@ All implementations reference the official Snowflake backup documentation:
 | `_IS_CURRENT` | `BOOLEAN` | Flag indicating if this is the current active version |
 | `_VALID_FROM` | `TIMESTAMP_NTZ` | Timestamp when this version became effective |
 | `_VALID_TO` | `VARCHAR(50)` | Timestamp when this version was superseded (or '9999-12-31 23:59:59' for current) |
-| `Id` | `VARCHAR(18)` | Primary identifier from source system |
-| `IsDeleted` | `BOOLEAN` | Soft delete flag from source |
-| `CreatedDate` | `VARCHAR(50)` | Original creation timestamp from source |
-| `CreatedById` | `VARCHAR(18)` | User ID who created the record in source |
-| `LastModifiedDate` | `VARCHAR(50)` | Last modification timestamp from source |
-| `LastModifiedById` | `VARCHAR(18)` | User ID who last modified the record in source |
-| `SystemModstamp` | `VARCHAR(50)` | System modification timestamp from source |
 
 ### Column Order Convention
 
@@ -223,14 +621,7 @@ CREATE TABLE archive_schema.TABLE_NAME (
     "_ROW_HASH"           VARCHAR(64),
     "_IS_CURRENT"         BOOLEAN,
     "_VALID_FROM"         TIMESTAMP_NTZ,
-    "_VALID_TO"           VARCHAR(50),
-    "Id"                  VARCHAR(18),
-    "IsDeleted"           BOOLEAN,
-    "CreatedDate"         VARCHAR(50),
-    "CreatedById"         VARCHAR(18),
-    "LastModifiedDate"    VARCHAR(50),
-    "LastModifiedById"    VARCHAR(18),
-    "SystemModstamp"      VARCHAR(50)
+    "_VALID_TO"           VARCHAR(50)
 );
 ```
 
@@ -400,14 +791,7 @@ CREATE TABLE TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE (
     "_ROW_HASH"             VARCHAR(64),
     "_IS_CURRENT"           BOOLEAN,
     "_VALID_FROM"           TIMESTAMP_NTZ,
-    "_VALID_TO"             VARCHAR(50),
-    "Id"                    VARCHAR(18),
-    "IsDeleted"             BOOLEAN,
-    "CreatedDate"           VARCHAR(50),
-    "CreatedById"           VARCHAR(18),
-    "LastModifiedDate"      VARCHAR(50),
-    "LastModifiedById"      VARCHAR(18),
-    "SystemModstamp"        VARCHAR(50)
+    "_VALID_TO"             VARCHAR(50)
 );
 ```
 
@@ -470,7 +854,7 @@ CREATE TABLE TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE (
 
 When contributing to this project:
 
-1. All tables MUST include the complete SCD column set (14 columns)
+1. All tables MUST include the complete SCD column set (7 columns)
 2. Reference https://docs.snowflake.com/en/user-guide/backups for backup patterns
 3. Include ASCII architecture diagrams in documentation
 4. Document semantic model implications

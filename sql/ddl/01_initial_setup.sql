@@ -21,13 +21,6 @@ SCD Metadata Columns (appended to ALL archive tables):
     _IS_CURRENT         BOOLEAN         - Current version flag
     _VALID_FROM         TIMESTAMP_NTZ   - Version start timestamp
     _VALID_TO           VARCHAR(50)     - Version end timestamp
-    Id                  VARCHAR(18)     - Primary identifier
-    IsDeleted           BOOLEAN         - Soft delete flag
-    CreatedDate         VARCHAR(50)     - Original creation timestamp
-    CreatedById         VARCHAR(18)     - Creator user ID
-    LastModifiedDate    VARCHAR(50)     - Last modification timestamp
-    LastModifiedById    VARCHAR(18)     - Last modifier user ID
-    SystemModstamp      VARCHAR(50)     - System modification timestamp
 
 ================================================================================
 */
@@ -172,14 +165,7 @@ CREATE TABLE IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG (
     "_ROW_HASH"         VARCHAR(64),
     "_IS_CURRENT"       BOOLEAN DEFAULT TRUE,
     "_VALID_FROM"       TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
-    "_VALID_TO"         VARCHAR(50) DEFAULT '9999-12-31 23:59:59',
-    "Id"                VARCHAR(18),
-    "IsDeleted"         BOOLEAN DEFAULT FALSE,
-    "CreatedDate"       VARCHAR(50),
-    "CreatedById"       VARCHAR(18),
-    "LastModifiedDate"  VARCHAR(50),
-    "LastModifiedById"  VARCHAR(18),
-    "SystemModstamp"    VARCHAR(50)
+    "_VALID_TO"         VARCHAR(50) DEFAULT '9999-12-31 23:59:59'
 )
 COMMENT = 'Audit log of all SCD load operations. Ref: https://docs.snowflake.com/en/user-guide/backups';
 
