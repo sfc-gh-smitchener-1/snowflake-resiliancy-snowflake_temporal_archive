@@ -74,27 +74,28 @@ CREATE WAREHOUSE IF NOT EXISTS TEMPORAL_ARCHIVE_WH
 
 
 -- =============================================================================
--- CREATE WORM BACKUP POLICY (requires ACCOUNTADMIN)
+-- CREATE WORM BACKUP POLICY AND BACKUP SET
 -- Reference: https://docs.snowflake.com/en/user-guide/backups
 --
--- RETENTION LOCK ensures backups cannot be deleted by ANY user
--- Daily backups (1440 minutes) retained for 7 years (2555 days)
--- Requires Business Critical Edition or higher
+-- Business Critical Edition required for:
+--   • BACKUP POLICY - defines schedule and retention
+--   • BACKUP SET - container for database backups
+--   • WITH RETENTION LOCK - immutable backups (optional, irreversible)
+--
+-- Daily backups retained for 7 years (2555 days)
 -- =============================================================================
 
+-- Step 1: Create the backup policy
 CREATE BACKUP POLICY IF NOT EXISTS TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY
-    WITH RETENTION LOCK
     SCHEDULE = '1440 MINUTE'
     EXPIRE_AFTER_DAYS = 2555
-    COMMENT = 'Snowflake Temporal Archive: WORM-compliant daily backups with 7-year retention. Immutable per regulatory requirements. Ref: https://docs.snowflake.com/en/user-guide/backups';
+    COMMENT = 'Snowflake Temporal Archive: Daily backups with 7-year retention. Ref: https://docs.snowflake.com/en/user-guide/backups';
 
-
--- =============================================================================
--- APPLY BACKUP POLICY TO DATABASE
--- =============================================================================
-
-ALTER DATABASE TEMPORAL_ARCHIVE
-    SET BACKUP POLICY = TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY;
+-- Step 2: Create a backup set for the database with the policy
+CREATE BACKUP SET IF NOT EXISTS TEMPORAL_ARCHIVE_BACKUP_SET
+    FOR DATABASE TEMPORAL_ARCHIVE
+    WITH BACKUP POLICY TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY
+    COMMENT = 'Backup set for Temporal Archive database';
 
 
 -- =============================================================================
@@ -252,8 +253,9 @@ SHOW SCHEMAS IN DATABASE TEMPORAL_ARCHIVE;
 -- Verify warehouse
 SHOW WAREHOUSES LIKE 'TEMPORAL_ARCHIVE%';
 
--- Verify backup policy
+-- Verify backup policy and backup set
 DESCRIBE BACKUP POLICY TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY;
+SHOW BACKUP SETS LIKE 'TEMPORAL_ARCHIVE%';
 
 -- Verify current role
 SELECT CURRENT_ROLE() AS CURRENT_ROLE, 'DATA_ADMIN should own all objects' AS NOTE;
@@ -282,10 +284,9 @@ SELECT '01_initial_setup.sql completed successfully' AS STATUS;
 │   WAREHOUSE:        TEMPORAL_ARCHIVE_WH (XSMALL, auto-suspend 60s)              │
 │                                                                                 │
 │   BACKUP POLICY:    TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY                         │
-│                     • WITH RETENTION LOCK (immutable)                           │
 │                     • SCHEDULE: Daily (1440 minutes)                            │
 │                     • RETENTION: 7 years (2555 days)                            │
-│                     • Requires Business Critical Edition                        │
+│                     • Business Critical Edition                                 │
 │                                                                                 │
 │   SUBORDINATE       TEMPORAL_ARCHIVE_READER  (SELECT only)                      │
 │   ROLES:            TEMPORAL_ARCHIVE_WRITER  (SCD load operations)              │
