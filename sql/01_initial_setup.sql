@@ -74,6 +74,14 @@ CREATE WAREHOUSE IF NOT EXISTS TEMPORAL_ARCHIVE_WH
 
 
 -- =============================================================================
+-- CREATE ARCHIVE SCHEMA FIRST (needed for backup policy)
+-- =============================================================================
+
+CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE
+    COMMENT = 'Core archive utilities, procedures, and configuration';
+
+
+-- =============================================================================
 -- CREATE WORM BACKUP POLICY AND BACKUP SET
 -- Reference: https://docs.snowflake.com/en/user-guide/backups
 --
@@ -85,16 +93,16 @@ CREATE WAREHOUSE IF NOT EXISTS TEMPORAL_ARCHIVE_WH
 -- Daily backups retained for 7 years (2555 days)
 -- =============================================================================
 
--- Step 1: Create the backup policy
-CREATE BACKUP POLICY IF NOT EXISTS TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY
+-- Step 1: Create the backup policy in the ARCHIVE schema
+CREATE BACKUP POLICY IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE.TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY
     SCHEDULE = '1440 MINUTE'
     EXPIRE_AFTER_DAYS = 2555
     COMMENT = 'Snowflake Temporal Archive: Daily backups with 7-year retention. Ref: https://docs.snowflake.com/en/user-guide/backups';
 
 -- Step 2: Create a backup set for the database with the policy
-CREATE BACKUP SET IF NOT EXISTS TEMPORAL_ARCHIVE_BACKUP_SET
+CREATE BACKUP SET IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE.TEMPORAL_ARCHIVE_BACKUP_SET
     FOR DATABASE TEMPORAL_ARCHIVE
-    WITH BACKUP POLICY TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY
+    WITH BACKUP POLICY TEMPORAL_ARCHIVE.ARCHIVE.TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY
     COMMENT = 'Backup set for Temporal Archive database';
 
 
@@ -172,9 +180,7 @@ USE WAREHOUSE TEMPORAL_ARCHIVE_WH;
 -- CREATE SCHEMAS (owned by DATA_ADMIN)
 -- =============================================================================
 
--- Core archive schema (procedures, registry, logs)
-CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE
-    COMMENT = 'Core archive utilities, procedures, and configuration';
+-- Note: ARCHIVE schema already created above for backup policy
 
 -- ACCOUNT_USAGE archive
 CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.ACCOUNT_USAGE
@@ -254,8 +260,8 @@ SHOW SCHEMAS IN DATABASE TEMPORAL_ARCHIVE;
 SHOW WAREHOUSES LIKE 'TEMPORAL_ARCHIVE%';
 
 -- Verify backup policy and backup set
-DESCRIBE BACKUP POLICY TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY;
-SHOW BACKUP SETS LIKE 'TEMPORAL_ARCHIVE%';
+DESCRIBE BACKUP POLICY TEMPORAL_ARCHIVE.ARCHIVE.TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY;
+SHOW BACKUP SETS IN SCHEMA TEMPORAL_ARCHIVE.ARCHIVE;
 
 -- Verify current role
 SELECT CURRENT_ROLE() AS CURRENT_ROLE, 'DATA_ADMIN should own all objects' AS NOTE;
