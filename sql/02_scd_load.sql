@@ -452,13 +452,15 @@ DECLARE
     views_skipped INTEGER DEFAULT 0;
     v_target_table VARCHAR;
     v_pk_columns VARCHAR;
+    v_source_schema VARCHAR;
+    v_source_view VARCHAR;
+    v_is_active BOOLEAN;
+    v_has_pk BOOLEAN;
 BEGIN
     start_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
     
     -- ==========================================================================
-    -- DYNAMIC VIEW DISCOVERY
-    -- Query SNOWFLAKE.INFORMATION_SCHEMA to get all views in ACCOUNT_USAGE
-    -- and ORGANIZATION_USAGE schemas, then join to our PK mapping table.
+    -- PHASE 1: Process views that HAVE primary key mappings (INNER JOIN)
     -- ==========================================================================
     
     FOR rec IN (
@@ -468,36 +470,37 @@ BEGIN
             pk.PRIMARY_KEY_COLUMNS,
             pk.IS_ACTIVE
         FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
-        LEFT JOIN TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS pk
+        INNER JOIN TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS pk
             ON pk.SOURCE_SCHEMA = v.TABLE_SCHEMA
             AND pk.SOURCE_VIEW = v.TABLE_NAME
         WHERE v.TABLE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
         ORDER BY v.TABLE_SCHEMA, v.TABLE_NAME
     )
     DO
-        -- Skip views without PK mapping or inactive views
-        IF (rec.PRIMARY_KEY_COLUMNS IS NULL OR rec.IS_ACTIVE = FALSE) THEN
+        v_source_schema := rec.SOURCE_SCHEMA;
+        v_source_view := rec.SOURCE_VIEW;
+        v_pk_columns := rec.PRIMARY_KEY_COLUMNS;
+        v_is_active := rec.IS_ACTIVE;
+        
+        -- Skip inactive views
+        IF (v_is_active = FALSE) THEN
             skipped_views := ARRAY_APPEND(skipped_views, OBJECT_CONSTRUCT(
-                'schema', rec.SOURCE_SCHEMA,
-                'view', rec.SOURCE_VIEW,
-                'reason', CASE 
-                    WHEN rec.PRIMARY_KEY_COLUMNS IS NULL THEN 'No primary key mapping defined'
-                    ELSE 'Marked as inactive'
-                END
+                'schema', v_source_schema,
+                'view', v_source_view,
+                'reason', 'Marked as inactive'
             ));
             views_skipped := views_skipped + 1;
         ELSE
             -- Construct target table name
-            v_target_table := rec.SOURCE_VIEW || '_ARCHIVE';
-            v_pk_columns := rec.PRIMARY_KEY_COLUMNS;
+            v_target_table := v_source_view || '_ARCHIVE';
             
             -- Call the SCD load procedure
             CALL TEMPORAL_ARCHIVE.ARCHIVE.LOAD_TABLE_SCD(
                 'SNOWFLAKE',
-                rec.SOURCE_SCHEMA,
-                rec.SOURCE_VIEW,
+                v_source_schema,
+                v_source_view,
                 'TEMPORAL_ARCHIVE',
-                rec.SOURCE_SCHEMA,
+                v_source_schema,
                 v_target_table,
                 v_pk_columns
             ) INTO table_result;
@@ -512,6 +515,32 @@ BEGIN
                 error_count := error_count + 1;
             END IF;
         END IF;
+    END FOR;
+    
+    -- ==========================================================================
+    -- PHASE 2: Log views that DON'T have primary key mappings
+    -- ==========================================================================
+    
+    FOR rec IN (
+        SELECT 
+            v.TABLE_SCHEMA AS SOURCE_SCHEMA,
+            v.TABLE_NAME AS SOURCE_VIEW
+        FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
+        WHERE v.TABLE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
+          AND NOT EXISTS (
+              SELECT 1 FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS pk
+              WHERE pk.SOURCE_SCHEMA = v.TABLE_SCHEMA
+                AND pk.SOURCE_VIEW = v.TABLE_NAME
+          )
+        ORDER BY v.TABLE_SCHEMA, v.TABLE_NAME
+    )
+    DO
+        skipped_views := ARRAY_APPEND(skipped_views, OBJECT_CONSTRUCT(
+            'schema', rec.SOURCE_SCHEMA,
+            'view', rec.SOURCE_VIEW,
+            'reason', 'No primary key mapping defined'
+        ));
+        views_skipped := views_skipped + 1;
     END FOR;
     
     end_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
