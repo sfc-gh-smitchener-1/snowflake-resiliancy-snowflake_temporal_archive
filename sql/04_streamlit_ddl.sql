@@ -2,47 +2,35 @@
 -- SNOWFLAKE TEMPORAL ARCHIVE - STREAMLIT DDL
 -- ============================================================================
 -- 
--- This script creates the supporting database objects for the Streamlit app:
---   1. STREAMLIT schema and stage
---   2. Helper views for archive exploration
---   3. Configuration tables
---   4. Stored procedures for data access
+-- Creates the supporting database objects for the Streamlit app.
+-- Run this script in a Snowflake Worksheet after 03_semantic_layer.sql.
 --
 -- Reference: https://docs.snowflake.com/en/user-guide/backups
---
--- RUN AS: DATA_ADMIN (owner of all Temporal Archive objects)
---
--- BEFORE RUNNING THIS SCRIPT, execute these commands in your worksheet:
---     USE ROLE DATA_ADMIN;
---     USE DATABASE TEMPORAL_ARCHIVE;
---     USE WAREHOUSE TEMPORAL_ARCHIVE_WH;
 -- ============================================================================
 
--- *** IMPORTANT: Run these USE statements BEFORE executing this script ***
--- *** If using Git integration or Execute Immediate, run separately first ***
--- USE ROLE DATA_ADMIN;
--- USE DATABASE TEMPORAL_ARCHIVE;
--- USE WAREHOUSE TEMPORAL_ARCHIVE_WH;
+-- =============================================================================
+-- RUN AS DATA_ADMIN
+-- =============================================================================
+USE ROLE DATA_ADMIN;
+USE DATABASE TEMPORAL_ARCHIVE;
+USE WAREHOUSE TEMPORAL_ARCHIVE_WH;
 
--- ═══════════════════════════════════════════════════════════════════════════
+-- =============================================================================
 -- CREATE STREAMLIT SCHEMA AND STAGE
--- ═══════════════════════════════════════════════════════════════════════════
+-- =============================================================================
 
 CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.STREAMLIT
     COMMENT = 'Streamlit application objects. Ref: https://docs.snowflake.com/en/user-guide/backups';
 
-USE SCHEMA TEMPORAL_ARCHIVE.STREAMLIT;
-
-CREATE STAGE IF NOT EXISTS STREAMLIT_STAGE
+CREATE STAGE IF NOT EXISTS TEMPORAL_ARCHIVE.STREAMLIT.STREAMLIT_STAGE
     DIRECTORY = (ENABLE = TRUE)
     COMMENT = 'Stage for Temporal Archive Streamlit application files';
 
 
--- ═══════════════════════════════════════════════════════════════════════════
+-- =============================================================================
 -- HELPER VIEWS FOR STREAMLIT APP
--- ═══════════════════════════════════════════════════════════════════════════
+-- =============================================================================
 
--- View: Archive Table Inventory
 CREATE OR REPLACE VIEW TEMPORAL_ARCHIVE.STREAMLIT.VW_ARCHIVE_INVENTORY AS
 SELECT 
     TABLE_SCHEMA AS SOURCE_SCHEMA,
@@ -56,7 +44,6 @@ WHERE TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA', 'STREAMLIT', 'SEMANTIC', 'ARCHI
   AND TABLE_TYPE = 'BASE TABLE'
 ORDER BY TABLE_SCHEMA, TABLE_NAME;
 
--- View: Archive Summary by Schema
 CREATE OR REPLACE VIEW TEMPORAL_ARCHIVE.STREAMLIT.VW_ARCHIVE_SUMMARY AS
 SELECT 
     TABLE_SCHEMA AS SOURCE_SCHEMA,
@@ -70,7 +57,6 @@ WHERE TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA', 'STREAMLIT', 'SEMANTIC', 'ARCHI
 GROUP BY TABLE_SCHEMA
 ORDER BY TABLE_SCHEMA;
 
--- View: SCD Load History
 CREATE OR REPLACE VIEW TEMPORAL_ARCHIVE.STREAMLIT.VW_LOAD_HISTORY AS
 SELECT 
     LOG_ID,
@@ -86,7 +72,6 @@ FROM TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG
 ORDER BY LOAD_TIMESTAMP DESC
 LIMIT 100;
 
--- View: Semantic Views Available
 CREATE OR REPLACE VIEW TEMPORAL_ARCHIVE.STREAMLIT.VW_SEMANTIC_VIEWS AS
 SELECT 
     SOURCE_SCHEMA,
@@ -99,45 +84,25 @@ FROM TEMPORAL_ARCHIVE.SEMANTIC.SEMANTIC_CONFIG
 WHERE IS_ACTIVE = TRUE
 ORDER BY SOURCE_SCHEMA, VIEW_NAME;
 
--- View: Task Execution Status
-CREATE OR REPLACE VIEW TEMPORAL_ARCHIVE.STREAMLIT.VW_TASK_STATUS AS
-SELECT 
-    NAME AS TASK_NAME,
-    STATE,
-    SCHEDULE,
-    COMMENT,
-    CREATED_ON,
-    LAST_COMMITTED_ON
-FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
-    SCHEDULED_TIME_RANGE_START => DATEADD('day', -7, CURRENT_TIMESTAMP()),
-    RESULT_LIMIT => 50
-))
-WHERE DATABASE_NAME = 'TEMPORAL_ARCHIVE'
-ORDER BY SCHEDULED_TIME DESC;
-
--- View: Backup Policy Status
 CREATE OR REPLACE VIEW TEMPORAL_ARCHIVE.STREAMLIT.VW_BACKUP_STATUS AS
 SELECT
     'TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY' AS POLICY_NAME,
     'ENABLED' AS STATUS,
     'Daily (1440 minutes)' AS SCHEDULE,
     '7 years (2555 days)' AS RETENTION,
-    'YES' AS RETENTION_LOCK,
     'Business Critical' AS EDITION_REQUIRED
 FROM DUAL;
 
 
--- ═══════════════════════════════════════════════════════════════════════════
+-- =============================================================================
 -- STREAMLIT APP CONFIGURATION TABLE
--- ═══════════════════════════════════════════════════════════════════════════
+-- =============================================================================
 
 CREATE TABLE IF NOT EXISTS TEMPORAL_ARCHIVE.STREAMLIT.APP_CONFIG (
     CONFIG_KEY          VARCHAR(100) PRIMARY KEY,
     CONFIG_VALUE        VARIANT,
     DESCRIPTION         VARCHAR(500),
     UPDATED_AT          TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
-    
-    -- SCD Metadata Columns
     "_LOADED_AT"        TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
     "_SOURCE_SYSTEM"    VARCHAR(100) DEFAULT 'TEMPORAL_ARCHIVE',
     "_SOURCE_TABLE"     VARCHAR(100) DEFAULT 'APP_CONFIG',
@@ -147,7 +112,6 @@ CREATE TABLE IF NOT EXISTS TEMPORAL_ARCHIVE.STREAMLIT.APP_CONFIG (
     "_VALID_TO"         VARCHAR(50) DEFAULT '9999-12-31 23:59:59'
 );
 
--- Insert default configuration
 INSERT INTO TEMPORAL_ARCHIVE.STREAMLIT.APP_CONFIG (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION)
 SELECT 'SOURCE_SCHEMAS', PARSE_JSON('["ACCOUNT_USAGE", "ORGANIZATION_USAGE", "DATA_SHARING_USAGE"]'), 'Archived source schemas'
 WHERE NOT EXISTS (SELECT 1 FROM TEMPORAL_ARCHIVE.STREAMLIT.APP_CONFIG WHERE CONFIG_KEY = 'SOURCE_SCHEMAS');
@@ -156,22 +120,11 @@ INSERT INTO TEMPORAL_ARCHIVE.STREAMLIT.APP_CONFIG (CONFIG_KEY, CONFIG_VALUE, DES
 SELECT 'CORTEX_MODEL', PARSE_JSON('"llama3.1-70b"'), 'Cortex model for natural language queries'
 WHERE NOT EXISTS (SELECT 1 FROM TEMPORAL_ARCHIVE.STREAMLIT.APP_CONFIG WHERE CONFIG_KEY = 'CORTEX_MODEL');
 
-INSERT INTO TEMPORAL_ARCHIVE.STREAMLIT.APP_CONFIG (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION)
-SELECT 'SAMPLE_QUESTIONS', PARSE_JSON('[
-    "Show warehouse credit usage by month for the last 2 years",
-    "Which users have the most failed login attempts?",
-    "What is the storage growth trend?",
-    "Show query count by user and warehouse",
-    "List dormant users who haven''t logged in for 90 days"
-]'), 'Sample questions for Cortex Analyst'
-WHERE NOT EXISTS (SELECT 1 FROM TEMPORAL_ARCHIVE.STREAMLIT.APP_CONFIG WHERE CONFIG_KEY = 'SAMPLE_QUESTIONS');
 
-
--- ═══════════════════════════════════════════════════════════════════════════
+-- =============================================================================
 -- STREAMLIT SUPPORT PROCEDURES
--- ═══════════════════════════════════════════════════════════════════════════
+-- =============================================================================
 
--- Procedure to sample data from any archive table
 CREATE OR REPLACE PROCEDURE TEMPORAL_ARCHIVE.STREAMLIT.SAMPLE_ARCHIVE_DATA(
     P_SCHEMA VARCHAR,
     P_TABLE_NAME VARCHAR,
@@ -183,7 +136,6 @@ AS
 $$
 DECLARE
     result_sql VARCHAR;
-    result_data VARIANT;
 BEGIN
     result_sql := 'SELECT * FROM TEMPORAL_ARCHIVE.' || P_SCHEMA || '.' || P_TABLE_NAME || 
                   ' WHERE "_IS_CURRENT" = TRUE LIMIT ' || P_LIMIT::VARCHAR;
@@ -206,7 +158,6 @@ EXCEPTION
 END;
 $$;
 
--- Procedure to get table column information
 CREATE OR REPLACE PROCEDURE TEMPORAL_ARCHIVE.STREAMLIT.GET_TABLE_COLUMNS(
     P_SCHEMA VARCHAR,
     P_TABLE_NAME VARCHAR
@@ -248,7 +199,6 @@ EXCEPTION
 END;
 $$;
 
--- Procedure to run SCD load manually
 CREATE OR REPLACE PROCEDURE TEMPORAL_ARCHIVE.STREAMLIT.TRIGGER_SCD_LOAD()
 RETURNS VARIANT
 LANGUAGE SQL
@@ -269,32 +219,27 @@ END;
 $$;
 
 
--- ═══════════════════════════════════════════════════════════════════════════
+-- =============================================================================
 -- GRANTS
--- ═══════════════════════════════════════════════════════════════════════════
+-- =============================================================================
 
 GRANT USAGE ON SCHEMA TEMPORAL_ARCHIVE.STREAMLIT TO ROLE TEMPORAL_ARCHIVE_READER;
+
 GRANT USAGE ON SCHEMA TEMPORAL_ARCHIVE.STREAMLIT TO ROLE TEMPORAL_ARCHIVE_WRITER;
+
 GRANT USAGE ON SCHEMA TEMPORAL_ARCHIVE.STREAMLIT TO ROLE TEMPORAL_ARCHIVE_ADMIN;
 
 GRANT SELECT ON ALL VIEWS IN SCHEMA TEMPORAL_ARCHIVE.STREAMLIT TO ROLE TEMPORAL_ARCHIVE_READER;
+
 GRANT SELECT ON ALL TABLES IN SCHEMA TEMPORAL_ARCHIVE.STREAMLIT TO ROLE TEMPORAL_ARCHIVE_READER;
 
 GRANT READ ON STAGE TEMPORAL_ARCHIVE.STREAMLIT.STREAMLIT_STAGE TO ROLE TEMPORAL_ARCHIVE_ADMIN;
+
 GRANT WRITE ON STAGE TEMPORAL_ARCHIVE.STREAMLIT.STREAMLIT_STAGE TO ROLE TEMPORAL_ARCHIVE_ADMIN;
 
-GRANT USAGE ON PROCEDURE TEMPORAL_ARCHIVE.STREAMLIT.SAMPLE_ARCHIVE_DATA(VARCHAR, VARCHAR, INTEGER) TO ROLE TEMPORAL_ARCHIVE_READER;
-GRANT USAGE ON PROCEDURE TEMPORAL_ARCHIVE.STREAMLIT.GET_TABLE_COLUMNS(VARCHAR, VARCHAR) TO ROLE TEMPORAL_ARCHIVE_READER;
-GRANT USAGE ON PROCEDURE TEMPORAL_ARCHIVE.STREAMLIT.TRIGGER_SCD_LOAD() TO ROLE TEMPORAL_ARCHIVE_ADMIN;
 
-
--- ═══════════════════════════════════════════════════════════════════════════
+-- =============================================================================
 -- VERIFICATION
--- ═══════════════════════════════════════════════════════════════════════════
+-- =============================================================================
 
-SELECT '04_streamlit_ddl.sql completed successfully' AS STATUS;
-
--- List created objects
-SHOW VIEWS IN SCHEMA TEMPORAL_ARCHIVE.STREAMLIT;
-SHOW TABLES IN SCHEMA TEMPORAL_ARCHIVE.STREAMLIT;
-SHOW PROCEDURES IN SCHEMA TEMPORAL_ARCHIVE.STREAMLIT;
+SELECT '04_streamlit_ddl.sql completed. Next: Upload app.py and run 05_streamlit_app.sql' AS STATUS;

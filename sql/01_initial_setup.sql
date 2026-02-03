@@ -4,40 +4,16 @@ SNOWFLAKE TEMPORAL ARCHIVE - INITIAL SETUP
 ================================================================================
 
 One-time setup script for the Temporal Archive infrastructure.
-Run this ONCE by ACCOUNTADMIN or SECURITYADMIN to bootstrap the environment.
-
-PREREQUISITE: ACCOUNTADMIN or SECURITYADMIN must run this script to:
-    • Create the DATA_ADMIN role
-    • Grant DATA_ADMIN necessary privileges
-    • Create initial infrastructure
-
-After this script, DATA_ADMIN owns all objects and can manage the archive.
+Run this script in a Snowflake Worksheet.
 
 Reference: https://docs.snowflake.com/en/user-guide/backups
-
-WORM Compliance:
-    • Backup Policy with RETENTION LOCK (immutable backups)
-    • Daily backups retained for 7 years (2555 days)
-    • Requires Business Critical Edition or higher
-
-SCD Metadata Columns (appended to ALL archive tables):
-    _LOADED_AT          TIMESTAMP_NTZ   - When record was loaded
-    _SOURCE_SYSTEM      VARCHAR(100)    - Source system identifier
-    _SOURCE_TABLE       VARCHAR(100)    - Original source table name
-    _ROW_HASH           VARCHAR(64)     - SHA-256 hash for change detection
-    _IS_CURRENT         BOOLEAN         - Current version flag
-    _VALID_FROM         TIMESTAMP_NTZ   - Version start timestamp
-    _VALID_TO           VARCHAR(50)     - Version end timestamp
-
 ================================================================================
 */
 
 -- =============================================================================
--- SECTION 1: RUN AS ACCOUNTADMIN/SECURITYADMIN
--- Creates roles, database, and grants privileges to DATA_ADMIN
+-- RUN AS ACCOUNTADMIN
 -- =============================================================================
 USE ROLE ACCOUNTADMIN;
-
 
 -- =============================================================================
 -- CREATE DATA_ADMIN ROLE (Owner of all Temporal Archive objects)
@@ -46,12 +22,11 @@ USE ROLE ACCOUNTADMIN;
 CREATE ROLE IF NOT EXISTS DATA_ADMIN
     COMMENT = 'Owner of Temporal Archive objects. Manages all archive infrastructure.';
 
--- Grant DATA_ADMIN to SYSADMIN for role hierarchy
 GRANT ROLE DATA_ADMIN TO ROLE SYSADMIN;
 
 
 -- =============================================================================
--- CREATE DATABASE (as ACCOUNTADMIN, then transfer ownership)
+-- CREATE DATABASE
 -- =============================================================================
 
 CREATE DATABASE IF NOT EXISTS TEMPORAL_ARCHIVE
@@ -59,7 +34,7 @@ CREATE DATABASE IF NOT EXISTS TEMPORAL_ARCHIVE
 
 
 -- =============================================================================
--- CREATE WAREHOUSE (as ACCOUNTADMIN, then transfer ownership)
+-- CREATE WAREHOUSE
 -- =============================================================================
 
 CREATE WAREHOUSE IF NOT EXISTS TEMPORAL_ARCHIVE_WH
@@ -74,52 +49,36 @@ CREATE WAREHOUSE IF NOT EXISTS TEMPORAL_ARCHIVE_WH
 
 
 -- =============================================================================
--- CREATE ARCHIVE SCHEMA FIRST (needed for backup policy)
+-- CREATE SCHEMAS
 -- =============================================================================
 
 CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE
     COMMENT = 'Core archive utilities, procedures, and configuration';
 
+CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.ACCOUNT_USAGE
+    COMMENT = 'Archive of SNOWFLAKE.ACCOUNT_USAGE views';
 
--- =============================================================================
--- CREATE WORM BACKUP POLICY AND BACKUP SET
--- Reference: https://docs.snowflake.com/en/user-guide/backups
---
--- Business Critical Edition required for:
---   • BACKUP POLICY - defines schedule and retention
---   • BACKUP SET - container for database backups
---   • WITH RETENTION LOCK - immutable backups (optional, irreversible)
---
--- Daily backups retained for 7 years (2555 days)
--- =============================================================================
+CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.ORGANIZATION_USAGE
+    COMMENT = 'Archive of SNOWFLAKE.ORGANIZATION_USAGE views';
 
--- Step 1: Create the backup policy in the ARCHIVE schema
-CREATE BACKUP POLICY IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE.TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY
-    SCHEDULE = '1440 MINUTE'
-    EXPIRE_AFTER_DAYS = 2555
-    COMMENT = 'Snowflake Temporal Archive: Daily backups with 7-year retention. Ref: https://docs.snowflake.com/en/user-guide/backups';
+CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.DATA_SHARING_USAGE
+    COMMENT = 'Archive of SNOWFLAKE.DATA_SHARING_USAGE views';
 
--- Step 2: Create a backup set for the database with the policy
-CREATE BACKUP SET IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE.TEMPORAL_ARCHIVE_BACKUP_SET
-    FOR DATABASE TEMPORAL_ARCHIVE
-    WITH BACKUP POLICY TEMPORAL_ARCHIVE.ARCHIVE.TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY
-    COMMENT = 'Backup set for Temporal Archive database';
+CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.READER_ACCOUNT_USAGE
+    COMMENT = 'Archive of SNOWFLAKE.READER_ACCOUNT_USAGE views';
 
 
 -- =============================================================================
 -- GRANT OWNERSHIP TO DATA_ADMIN
 -- =============================================================================
 
--- Transfer database ownership
 GRANT OWNERSHIP ON DATABASE TEMPORAL_ARCHIVE TO ROLE DATA_ADMIN COPY CURRENT GRANTS;
 
--- Transfer warehouse ownership
 GRANT OWNERSHIP ON WAREHOUSE TEMPORAL_ARCHIVE_WH TO ROLE DATA_ADMIN COPY CURRENT GRANTS;
 
 
 -- =============================================================================
 -- GRANT DATA_ADMIN ACCESS TO SNOWFLAKE.ACCOUNT_USAGE
--- Required to read source views for archiving
 -- =============================================================================
 
 GRANT IMPORTED PRIVILEGES ON DATABASE SNOWFLAKE TO ROLE DATA_ADMIN;
@@ -127,15 +86,15 @@ GRANT IMPORTED PRIVILEGES ON DATABASE SNOWFLAKE TO ROLE DATA_ADMIN;
 
 -- =============================================================================
 -- GRANT DATA_ADMIN EXECUTE TASK PRIVILEGE
--- Required to create and manage Tasks
 -- =============================================================================
 
 GRANT EXECUTE TASK ON ACCOUNT TO ROLE DATA_ADMIN;
+
 GRANT EXECUTE MANAGED TASK ON ACCOUNT TO ROLE DATA_ADMIN;
 
 
 -- =============================================================================
--- CREATE SUBORDINATE ROLES (owned by DATA_ADMIN)
+-- CREATE SUBORDINATE ROLES
 -- =============================================================================
 
 CREATE ROLE IF NOT EXISTS TEMPORAL_ARCHIVE_READER
@@ -147,13 +106,14 @@ CREATE ROLE IF NOT EXISTS TEMPORAL_ARCHIVE_WRITER
 CREATE ROLE IF NOT EXISTS TEMPORAL_ARCHIVE_ADMIN
     COMMENT = 'Admin access for backup policy and maintenance';
 
--- Grant subordinate roles to DATA_ADMIN
 GRANT ROLE TEMPORAL_ARCHIVE_READER TO ROLE DATA_ADMIN;
+
 GRANT ROLE TEMPORAL_ARCHIVE_WRITER TO ROLE DATA_ADMIN;
+
 GRANT ROLE TEMPORAL_ARCHIVE_ADMIN TO ROLE DATA_ADMIN;
 
--- Role hierarchy: WRITER includes READER, ADMIN includes WRITER
 GRANT ROLE TEMPORAL_ARCHIVE_READER TO ROLE TEMPORAL_ARCHIVE_WRITER;
+
 GRANT ROLE TEMPORAL_ARCHIVE_WRITER TO ROLE TEMPORAL_ARCHIVE_ADMIN;
 
 
@@ -162,45 +122,16 @@ GRANT ROLE TEMPORAL_ARCHIVE_WRITER TO ROLE TEMPORAL_ARCHIVE_ADMIN;
 -- =============================================================================
 
 GRANT ROLE DATA_ADMIN TO USER STEVE;
+
 GRANT ROLE TEMPORAL_ARCHIVE_ADMIN TO USER STEVE;
+
 GRANT ROLE TEMPORAL_ARCHIVE_WRITER TO USER STEVE;
+
 GRANT ROLE TEMPORAL_ARCHIVE_READER TO USER STEVE;
 
 
 -- =============================================================================
--- SECTION 2: SWITCH TO DATA_ADMIN
--- All subsequent objects will be owned by DATA_ADMIN
--- =============================================================================
-USE ROLE DATA_ADMIN;
-USE DATABASE TEMPORAL_ARCHIVE;
-USE WAREHOUSE TEMPORAL_ARCHIVE_WH;
-
-
--- =============================================================================
--- CREATE SCHEMAS (owned by DATA_ADMIN)
--- =============================================================================
-
--- Note: ARCHIVE schema already created above for backup policy
-
--- ACCOUNT_USAGE archive
-CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.ACCOUNT_USAGE
-    COMMENT = 'Archive of SNOWFLAKE.ACCOUNT_USAGE views';
-
--- ORGANIZATION_USAGE archive
-CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.ORGANIZATION_USAGE
-    COMMENT = 'Archive of SNOWFLAKE.ORGANIZATION_USAGE views';
-
--- DATA_SHARING_USAGE archive
-CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.DATA_SHARING_USAGE
-    COMMENT = 'Archive of SNOWFLAKE.DATA_SHARING_USAGE views';
-
--- READER_ACCOUNT_USAGE archive
-CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.READER_ACCOUNT_USAGE
-    COMMENT = 'Archive of SNOWFLAKE.READER_ACCOUNT_USAGE views';
-
-
--- =============================================================================
--- CREATE LOGGING TABLE (owned by DATA_ADMIN)
+-- CREATE LOGGING TABLE
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG (
@@ -213,8 +144,6 @@ CREATE TABLE IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG (
     STATUS              VARCHAR(50),
     ERROR_MESSAGE       VARCHAR(16777216),
     DURATION_SECONDS    NUMBER(10,2),
-    
-    -- SCD Metadata Columns (REQUIRED for ALL tables)
     "_LOADED_AT"        TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
     "_SOURCE_SYSTEM"    VARCHAR(100) DEFAULT 'TEMPORAL_ARCHIVE',
     "_SOURCE_TABLE"     VARCHAR(100) DEFAULT 'LOAD_LOG',
@@ -230,19 +159,22 @@ COMMENT = 'Audit log of all SCD load operations. Ref: https://docs.snowflake.com
 -- GRANT PERMISSIONS TO SUBORDINATE ROLES
 -- =============================================================================
 
--- Reader permissions
 GRANT USAGE ON DATABASE TEMPORAL_ARCHIVE TO ROLE TEMPORAL_ARCHIVE_READER;
+
 GRANT USAGE ON ALL SCHEMAS IN DATABASE TEMPORAL_ARCHIVE TO ROLE TEMPORAL_ARCHIVE_READER;
+
 GRANT SELECT ON ALL TABLES IN DATABASE TEMPORAL_ARCHIVE TO ROLE TEMPORAL_ARCHIVE_READER;
+
 GRANT SELECT ON FUTURE TABLES IN DATABASE TEMPORAL_ARCHIVE TO ROLE TEMPORAL_ARCHIVE_READER;
+
 GRANT USAGE ON WAREHOUSE TEMPORAL_ARCHIVE_WH TO ROLE TEMPORAL_ARCHIVE_READER;
 
--- Writer permissions (inherits READER via role hierarchy)
 GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN DATABASE TEMPORAL_ARCHIVE TO ROLE TEMPORAL_ARCHIVE_WRITER;
+
 GRANT SELECT, INSERT, UPDATE ON FUTURE TABLES IN DATABASE TEMPORAL_ARCHIVE TO ROLE TEMPORAL_ARCHIVE_WRITER;
 
--- Admin permissions (inherits WRITER via role hierarchy)
 GRANT ALL ON ALL SCHEMAS IN DATABASE TEMPORAL_ARCHIVE TO ROLE TEMPORAL_ARCHIVE_ADMIN;
+
 GRANT ALL ON FUTURE SCHEMAS IN DATABASE TEMPORAL_ARCHIVE TO ROLE TEMPORAL_ARCHIVE_ADMIN;
 
 
@@ -250,61 +182,4 @@ GRANT ALL ON FUTURE SCHEMAS IN DATABASE TEMPORAL_ARCHIVE TO ROLE TEMPORAL_ARCHIV
 -- VERIFICATION
 -- =============================================================================
 
--- Verify database setup
-SHOW DATABASES LIKE 'TEMPORAL_ARCHIVE%';
-
--- Verify schemas
-SHOW SCHEMAS IN DATABASE TEMPORAL_ARCHIVE;
-
--- Verify warehouse
-SHOW WAREHOUSES LIKE 'TEMPORAL_ARCHIVE%';
-
--- Verify backup policy and backup set
-DESCRIBE BACKUP POLICY TEMPORAL_ARCHIVE.ARCHIVE.TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY;
-SHOW BACKUP SETS IN SCHEMA TEMPORAL_ARCHIVE.ARCHIVE;
-
--- Verify current role
-SELECT CURRENT_ROLE() AS CURRENT_ROLE, 'DATA_ADMIN should own all objects' AS NOTE;
-
-SELECT '01_initial_setup.sql completed successfully' AS STATUS;
-
-
--- =============================================================================
--- SETUP SUMMARY
--- =============================================================================
-/*
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    TEMPORAL ARCHIVE - INITIAL SETUP COMPLETE                    │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   OWNER ROLE:       DATA_ADMIN (owns all objects)                               │
-│                                                                                 │
-│   DATABASE:         TEMPORAL_ARCHIVE                                            │
-│                                                                                 │
-│   SCHEMAS:          ARCHIVE            (procedures, config, logs)               │
-│                     ACCOUNT_USAGE      (Snowflake.ACCOUNT_USAGE archive)        │
-│                     ORGANIZATION_USAGE (Snowflake.ORGANIZATION_USAGE archive)   │
-│                     DATA_SHARING_USAGE (Snowflake.DATA_SHARING_USAGE archive)   │
-│                     READER_ACCOUNT_USAGE                                        │
-│                                                                                 │
-│   WAREHOUSE:        TEMPORAL_ARCHIVE_WH (XSMALL, auto-suspend 60s)              │
-│                                                                                 │
-│   BACKUP POLICY:    TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY                         │
-│                     • SCHEDULE: Daily (1440 minutes)                            │
-│                     • RETENTION: 7 years (2555 days)                            │
-│                     • Business Critical Edition                                 │
-│                                                                                 │
-│   SUBORDINATE       TEMPORAL_ARCHIVE_READER  (SELECT only)                      │
-│   ROLES:            TEMPORAL_ARCHIVE_WRITER  (SCD load operations)              │
-│                     TEMPORAL_ARCHIVE_ADMIN   (Full access)                      │
-│                                                                                 │
-│   DATA_ADMIN        • Owns TEMPORAL_ARCHIVE database                            │
-│   PRIVILEGES:       • Owns TEMPORAL_ARCHIVE_WH warehouse                        │
-│                     • IMPORTED PRIVILEGES on SNOWFLAKE database                 │
-│                     • EXECUTE TASK on account                                   │
-│                                                                                 │
-│   USER GRANTS:      User STEVE granted all roles for demo                       │
-│                                                                                 │
-│   Reference: https://docs.snowflake.com/en/user-guide/backups                   │
-└─────────────────────────────────────────────────────────────────────────────────┘
-*/
+SELECT 'TEMPORAL_ARCHIVE setup complete. Next: Run 02_scd_load_procedure.sql as DATA_ADMIN' AS STATUS;

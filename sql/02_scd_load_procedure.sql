@@ -5,59 +5,19 @@ SNOWFLAKE TEMPORAL ARCHIVE - SCD TYPE 2 LOAD PROCEDURE
 
 Native Snowflake stored procedure for SCD Type 2 loading.
 Runs twice daily (6 AM and 6 PM) via Snowflake Task.
-
-This procedure:
-1. Reads from Snowflake.* source views
-2. Computes row hashes for change detection
-3. Performs SCD Type 2 MERGE to archive tables
-4. Maintains full temporal history
+Run this script in a Snowflake Worksheet after 01_initial_setup.sql.
 
 Reference: https://docs.snowflake.com/en/user-guide/backups
-
-SCD Metadata Columns (appended to ALL rows):
-    _LOADED_AT          TIMESTAMP_NTZ   - When record was loaded
-    _SOURCE_SYSTEM      VARCHAR(100)    - Source system identifier
-    _SOURCE_TABLE       VARCHAR(100)    - Original source table name
-    _ROW_HASH           VARCHAR(64)     - SHA-256 hash for change detection
-    _IS_CURRENT         BOOLEAN         - Current version flag
-    _VALID_FROM         TIMESTAMP_NTZ   - Version start timestamp
-    _VALID_TO           VARCHAR(50)     - Version end timestamp
-
-Schedule:
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │  06:00 AM  ───▶  TASK_SCD_LOAD_MORNING   (This procedure)              │
-    │  06:00 PM  ───▶  TASK_SCD_LOAD_EVENING   (This procedure)              │
-    │  Daily     ───▶  BACKUP POLICY           (Automatic WORM backup)       │
-    └─────────────────────────────────────────────────────────────────────────┘
-
-WORM Backup:
-    Handled by TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY (Snowflake native backup)
-    • WITH RETENTION LOCK (immutable, cannot be deleted)
-    • Daily backups retained for 7 years (2555 days)
-    • Requires Business Critical Edition
-
-RUN AS: DATA_ADMIN (owner of all Temporal Archive objects)
-
-BEFORE RUNNING THIS SCRIPT, execute these commands in your worksheet:
-    USE ROLE DATA_ADMIN;
-    USE DATABASE TEMPORAL_ARCHIVE;
-    USE SCHEMA ARCHIVE;
-    USE WAREHOUSE TEMPORAL_ARCHIVE_WH;
-
 ================================================================================
 */
 
 -- =============================================================================
--- SET CONTEXT
--- Run these statements FIRST in your worksheet before running this script:
---
---   USE ROLE DATA_ADMIN;
---   USE DATABASE TEMPORAL_ARCHIVE;
---   USE SCHEMA ARCHIVE;
---   USE WAREHOUSE TEMPORAL_ARCHIVE_WH;
---
+-- RUN AS DATA_ADMIN
 -- =============================================================================
-
+USE ROLE DATA_ADMIN;
+USE DATABASE TEMPORAL_ARCHIVE;
+USE SCHEMA ARCHIVE;
+USE WAREHOUSE TEMPORAL_ARCHIVE_WH;
 
 -- =============================================================================
 -- TABLE REGISTRY: Defines all source-to-target mappings
@@ -71,12 +31,10 @@ CREATE TABLE IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE.TABLE_REGISTRY (
     TARGET_DATABASE         VARCHAR(256) NOT NULL,
     TARGET_SCHEMA           VARCHAR(256) NOT NULL,
     TARGET_TABLE            VARCHAR(256) NOT NULL,
-    PRIMARY_KEY_COLUMNS     VARCHAR(4096) NOT NULL,  -- Comma-separated list
+    PRIMARY_KEY_COLUMNS     VARCHAR(4096) NOT NULL,
     IS_ACTIVE               BOOLEAN DEFAULT TRUE,
     CREATED_AT              TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
     UPDATED_AT              TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
-    
-    -- SCD Metadata Columns (REQUIRED for ALL tables)
     "_LOADED_AT"            TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
     "_SOURCE_SYSTEM"        VARCHAR(100) DEFAULT 'TEMPORAL_ARCHIVE',
     "_SOURCE_TABLE"         VARCHAR(100) DEFAULT 'TABLE_REGISTRY',
@@ -92,11 +50,9 @@ COMMENT = 'Registry of tables to archive via SCD Type 2. Ref: https://docs.snowf
 -- POPULATE TABLE REGISTRY
 -- =============================================================================
 
--- Clear and repopulate (or use MERGE for updates)
 MERGE INTO TEMPORAL_ARCHIVE.ARCHIVE.TABLE_REGISTRY AS target
 USING (
     SELECT * FROM (VALUES
-        -- ACCOUNT_USAGE views
         ('SNOWFLAKE', 'ACCOUNT_USAGE', 'QUERY_HISTORY', 'TEMPORAL_ARCHIVE', 'ACCOUNT_USAGE', 'QUERY_HISTORY_ARCHIVE', 'QUERY_ID'),
         ('SNOWFLAKE', 'ACCOUNT_USAGE', 'WAREHOUSE_METERING_HISTORY', 'TEMPORAL_ARCHIVE', 'ACCOUNT_USAGE', 'WAREHOUSE_METERING_HISTORY_ARCHIVE', 'START_TIME,WAREHOUSE_ID'),
         ('SNOWFLAKE', 'ACCOUNT_USAGE', 'STORAGE_USAGE', 'TEMPORAL_ARCHIVE', 'ACCOUNT_USAGE', 'STORAGE_USAGE_ARCHIVE', 'USAGE_DATE'),
@@ -105,7 +61,6 @@ USING (
         ('SNOWFLAKE', 'ACCOUNT_USAGE', 'ROLES', 'TEMPORAL_ARCHIVE', 'ACCOUNT_USAGE', 'ROLES_ARCHIVE', 'ROLE_ID'),
         ('SNOWFLAKE', 'ACCOUNT_USAGE', 'DATABASES', 'TEMPORAL_ARCHIVE', 'ACCOUNT_USAGE', 'DATABASES_ARCHIVE', 'DATABASE_ID'),
         ('SNOWFLAKE', 'ACCOUNT_USAGE', 'TABLES', 'TEMPORAL_ARCHIVE', 'ACCOUNT_USAGE', 'TABLES_ARCHIVE', 'TABLE_ID'),
-        -- ORGANIZATION_USAGE views
         ('SNOWFLAKE', 'ORGANIZATION_USAGE', 'USAGE_IN_CURRENCY_DAILY', 'TEMPORAL_ARCHIVE', 'ORGANIZATION_USAGE', 'USAGE_IN_CURRENCY_DAILY_ARCHIVE', 'USAGE_DATE,ACCOUNT_LOCATOR,USAGE_TYPE'),
         ('SNOWFLAKE', 'ORGANIZATION_USAGE', 'CONTRACT_ITEMS', 'TEMPORAL_ARCHIVE', 'ORGANIZATION_USAGE', 'CONTRACT_ITEMS_ARCHIVE', 'CONTRACT_NUMBER,CONTRACT_ITEM_NUMBER')
     ) AS t(SOURCE_DATABASE, SOURCE_SCHEMA, SOURCE_VIEW, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, PRIMARY_KEY_COLUMNS)
@@ -173,7 +128,6 @@ DECLARE
     col VARCHAR;
     i INTEGER;
 BEGIN
-    -- Split column list and build COALESCE expressions
     columns := SPLIT(REPLACE(REPLACE(p_column_list, '"', ''), ' ', ''), ',');
     
     FOR i IN 0 TO ARRAY_SIZE(columns) - 1 DO
@@ -223,18 +177,14 @@ DECLARE
     i INTEGER;
     pk VARCHAR;
 BEGIN
-    -- Build fully qualified names
     source_fqn := p_source_database || '.' || p_source_schema || '.' || p_source_view;
     target_fqn := p_target_database || '.' || p_target_schema || '.' || p_target_table;
     
-    -- Get source columns
     CALL TEMPORAL_ARCHIVE.ARCHIVE.GET_SOURCE_COLUMNS(p_source_database, p_source_schema, p_source_view)
         INTO source_columns;
     
-    -- Build hash expression
     CALL TEMPORAL_ARCHIVE.ARCHIVE.GET_HASH_EXPRESSION(source_columns) INTO hash_expr;
     
-    -- Build join conditions from primary keys
     pk_columns := SPLIT(REPLACE(p_primary_key_columns, ' ', ''), ',');
     
     FOR i IN 0 TO ARRAY_SIZE(pk_columns) - 1 DO
@@ -247,7 +197,6 @@ BEGIN
         pk_match_condition := pk_match_condition || 'tgt."' || pk || '" = src."' || pk || '"';
     END FOR;
     
-    -- Step 1: MERGE to close existing records where data changed
     merge_sql := '
         MERGE INTO ' || target_fqn || ' AS target
         USING (
@@ -267,7 +216,6 @@ BEGIN
     EXECUTE IMMEDIATE merge_sql;
     rows_updated := SQLROWCOUNT;
     
-    -- Step 2: INSERT new/changed records
     insert_sql := '
         INSERT INTO ' || target_fqn || ' (
             ' || source_columns || ',
@@ -300,7 +248,6 @@ BEGIN
     EXECUTE IMMEDIATE insert_sql;
     rows_inserted := SQLROWCOUNT;
     
-    -- Return results
     RETURN OBJECT_CONSTRUCT(
         'source', source_fqn,
         'target', target_fqn,
@@ -325,9 +272,6 @@ $$;
 
 -- =============================================================================
 -- MAIN PROCEDURE: Run full SCD load for all registered tables
--- Reference: https://docs.snowflake.com/en/user-guide/backups
---
--- This is the MAIN procedure called by Snowflake Tasks twice daily.
 -- =============================================================================
 
 CREATE OR REPLACE PROCEDURE TEMPORAL_ARCHIVE.ARCHIVE.RUN_SCD_LOAD()
@@ -359,7 +303,6 @@ DECLARE
 BEGIN
     start_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
     
-    -- Process each registered table
     FOR rec IN table_cursor DO
         CALL TEMPORAL_ARCHIVE.ARCHIVE.LOAD_TABLE_SCD(
             rec.SOURCE_DATABASE,
@@ -383,7 +326,6 @@ BEGIN
     
     end_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
     
-    -- Log the run
     INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG (
         SOURCE_TABLE, TARGET_TABLE, ROWS_UPDATED, ROWS_INSERTED, 
         STATUS, DURATION_SECONDS, "_ROW_HASH"
@@ -398,7 +340,6 @@ BEGIN
         SHA2('ALL_TABLES' || total_updated || total_inserted, 256)
     );
     
-    -- Return summary
     RETURN OBJECT_CONSTRUCT(
         'start_time', start_time::VARCHAR,
         'end_time', end_time::VARCHAR,
@@ -416,10 +357,8 @@ $$;
 
 -- =============================================================================
 -- SNOWFLAKE TASKS: Schedule SCD loads twice daily
--- Reference: https://docs.snowflake.com/en/user-guide/backups
 -- =============================================================================
 
--- Morning load at 6:00 AM
 CREATE OR REPLACE TASK TEMPORAL_ARCHIVE.ARCHIVE.TASK_SCD_LOAD_MORNING
     WAREHOUSE = TEMPORAL_ARCHIVE_WH
     SCHEDULE = 'USING CRON 0 6 * * * America/New_York'
@@ -428,7 +367,6 @@ AS
     CALL TEMPORAL_ARCHIVE.ARCHIVE.RUN_SCD_LOAD();
 
 
--- Evening load at 6:00 PM
 CREATE OR REPLACE TASK TEMPORAL_ARCHIVE.ARCHIVE.TASK_SCD_LOAD_EVENING
     WAREHOUSE = TEMPORAL_ARCHIVE_WH
     SCHEDULE = 'USING CRON 0 18 * * * America/New_York'
@@ -442,55 +380,12 @@ AS
 -- =============================================================================
 
 ALTER TASK TEMPORAL_ARCHIVE.ARCHIVE.TASK_SCD_LOAD_MORNING RESUME;
+
 ALTER TASK TEMPORAL_ARCHIVE.ARCHIVE.TASK_SCD_LOAD_EVENING RESUME;
 
 
 -- =============================================================================
--- VERIFICATION & MONITORING QUERIES
+-- VERIFICATION
 -- =============================================================================
 
--- Check task status
--- SHOW TASKS IN SCHEMA TEMPORAL_ARCHIVE.ARCHIVE;
-
--- View task execution history
--- SELECT * FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY())
--- WHERE NAME LIKE 'TASK_SCD_LOAD%'
--- ORDER BY SCHEDULED_TIME DESC
--- LIMIT 20;
-
--- View load log
--- SELECT * FROM TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG
--- ORDER BY LOAD_TIMESTAMP DESC
--- LIMIT 50;
-
--- Manual execution for testing
--- CALL TEMPORAL_ARCHIVE.ARCHIVE.RUN_SCD_LOAD();
-
-
--- =============================================================================
--- COMPLETE SCHEDULE OVERVIEW
--- =============================================================================
-/*
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                    SNOWFLAKE TEMPORAL ARCHIVE - OPERATIONS                      │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│   TASK_SCD_LOAD_MORNING                                                         │
-│   ├── Schedule: CRON 0 6 * * * (6:00 AM daily)                                  │
-│   ├── Procedure: CALL RUN_SCD_LOAD()                                            │
-│   └── Purpose: Load Snowflake.* views → Archive tables (SCD Type 2)             │
-│                                                                                 │
-│   TASK_SCD_LOAD_EVENING                                                         │
-│   ├── Schedule: CRON 0 18 * * * (6:00 PM daily)                                 │
-│   ├── Procedure: CALL RUN_SCD_LOAD()                                            │
-│   └── Purpose: Load Snowflake.* views → Archive tables (SCD Type 2)             │
-│                                                                                 │
-│   TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY (Snowflake native backup)                 │
-│   ├── Schedule: Daily (every 1440 minutes)                                      │
-│   ├── Retention: 7 years (2555 days)                                            │
-│   ├── RETENTION LOCK: Enabled (immutable, cannot be deleted)                    │
-│   └── Purpose: WORM-compliant backups per regulatory requirements               │
-│                                                                                 │
-│   Reference: https://docs.snowflake.com/en/user-guide/backups                   │
-└─────────────────────────────────────────────────────────────────────────────────┘
-*/
+SELECT 'SCD procedures and tasks created. Next: Run 03_semantic_layer.sql as DATA_ADMIN' AS STATUS;
