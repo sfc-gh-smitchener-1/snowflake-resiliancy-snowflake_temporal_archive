@@ -47,12 +47,16 @@ BEFORE RUNNING THIS SCRIPT, execute these commands in your worksheet:
 ================================================================================
 */
 
--- *** IMPORTANT: Run these USE statements BEFORE executing this script ***
--- *** If using Git integration or Execute Immediate, run separately first ***
--- USE ROLE DATA_ADMIN;
--- USE DATABASE TEMPORAL_ARCHIVE;
--- USE SCHEMA ARCHIVE;
--- USE WAREHOUSE TEMPORAL_ARCHIVE_WH;
+-- =============================================================================
+-- SET CONTEXT
+-- Run these statements FIRST in your worksheet before running this script:
+--
+--   USE ROLE DATA_ADMIN;
+--   USE DATABASE TEMPORAL_ARCHIVE;
+--   USE SCHEMA ARCHIVE;
+--   USE WAREHOUSE TEMPORAL_ARCHIVE_WH;
+--
+-- =============================================================================
 
 
 -- =============================================================================
