@@ -460,21 +460,24 @@ BEGIN
     start_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
     
     -- ==========================================================================
-    -- PHASE 1: Process views that HAVE primary key mappings (INNER JOIN)
+    -- PHASE 1: Process views that HAVE primary key mappings
+    -- Query from the PK mapping table directly (it already has what we need)
     -- ==========================================================================
     
     FOR rec IN (
         SELECT 
-            v.TABLE_SCHEMA AS SOURCE_SCHEMA,
-            v.TABLE_NAME AS SOURCE_VIEW,
+            pk.SOURCE_SCHEMA,
+            pk.SOURCE_VIEW,
             pk.PRIMARY_KEY_COLUMNS,
             pk.IS_ACTIVE
-        FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
-        INNER JOIN TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS pk
-            ON pk.SOURCE_SCHEMA = v.TABLE_SCHEMA
-            AND pk.SOURCE_VIEW = v.TABLE_NAME
-        WHERE v.TABLE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
-        ORDER BY v.TABLE_SCHEMA, v.TABLE_NAME
+        FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS pk
+        WHERE pk.SOURCE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
+          AND EXISTS (
+              SELECT 1 FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
+              WHERE v.TABLE_SCHEMA = pk.SOURCE_SCHEMA
+                AND v.TABLE_NAME = pk.SOURCE_VIEW
+          )
+        ORDER BY pk.SOURCE_SCHEMA, pk.SOURCE_VIEW
     )
     DO
         v_source_schema := rec.SOURCE_SCHEMA;
@@ -519,12 +522,13 @@ BEGIN
     
     -- ==========================================================================
     -- PHASE 2: Log views that DON'T have primary key mappings
+    -- Query INFORMATION_SCHEMA but use TABLE_SCHEMA and TABLE_NAME directly
     -- ==========================================================================
     
     FOR rec IN (
         SELECT 
-            v.TABLE_SCHEMA AS SOURCE_SCHEMA,
-            v.TABLE_NAME AS SOURCE_VIEW
+            v.TABLE_SCHEMA,
+            v.TABLE_NAME
         FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
         WHERE v.TABLE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
           AND NOT EXISTS (
@@ -536,8 +540,8 @@ BEGIN
     )
     DO
         skipped_views := ARRAY_APPEND(skipped_views, OBJECT_CONSTRUCT(
-            'schema', rec.SOURCE_SCHEMA,
-            'view', rec.SOURCE_VIEW,
+            'schema', rec.TABLE_SCHEMA,
+            'view', rec.TABLE_NAME,
             'reason', 'No primary key mapping defined'
         ));
         views_skipped := views_skipped + 1;
