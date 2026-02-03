@@ -450,16 +450,14 @@ DECLARE
     error_count INTEGER DEFAULT 0;
     views_processed INTEGER DEFAULT 0;
     views_skipped INTEGER DEFAULT 0;
-    v_target_table VARCHAR;
-    v_pk_columns VARCHAR;
-    v_source_schema VARCHAR;
-    v_source_view VARCHAR;
+    v_call_sql VARCHAR;
     -- Cursor for iterating through PK mappings
     c_views CURSOR FOR 
         SELECT 
             SOURCE_SCHEMA,
             SOURCE_VIEW,
-            PRIMARY_KEY_COLUMNS
+            PRIMARY_KEY_COLUMNS,
+            SOURCE_VIEW || '_ARCHIVE' AS TARGET_TABLE
         FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS
         WHERE SOURCE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
           AND IS_ACTIVE = TRUE
@@ -473,23 +471,18 @@ BEGIN
     
     OPEN c_views;
     FOR rec IN c_views DO
-        v_source_schema := rec.SOURCE_SCHEMA;
-        v_source_view := rec.SOURCE_VIEW;
-        v_pk_columns := rec.PRIMARY_KEY_COLUMNS;
+        -- Build dynamic CALL statement
+        v_call_sql := 'CALL TEMPORAL_ARCHIVE.ARCHIVE.LOAD_TABLE_SCD(' ||
+            '''SNOWFLAKE'', ' ||
+            '''' || rec.SOURCE_SCHEMA || ''', ' ||
+            '''' || rec.SOURCE_VIEW || ''', ' ||
+            '''TEMPORAL_ARCHIVE'', ' ||
+            '''' || rec.SOURCE_SCHEMA || ''', ' ||
+            '''' || rec.TARGET_TABLE || ''', ' ||
+            '''' || rec.PRIMARY_KEY_COLUMNS || ''')';
         
-        -- Construct target table name
-        v_target_table := v_source_view || '_ARCHIVE';
-        
-        -- Call the SCD load procedure
-        CALL TEMPORAL_ARCHIVE.ARCHIVE.LOAD_TABLE_SCD(
-            'SNOWFLAKE',
-            v_source_schema,
-            v_source_view,
-            'TEMPORAL_ARCHIVE',
-            v_source_schema,
-            v_target_table,
-            v_pk_columns
-        ) INTO table_result;
+        -- Execute the call and capture result
+        EXECUTE IMMEDIATE v_call_sql INTO :table_result;
         
         results := ARRAY_APPEND(results, table_result);
         views_processed := views_processed + 1;
@@ -507,7 +500,7 @@ BEGIN
     -- PHASE 2: Count unmapped views (don't iterate, just get count)
     -- ==========================================================================
     
-    SELECT COUNT(*) INTO views_skipped
+    SELECT COUNT(*) INTO :views_skipped
     FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
     WHERE v.TABLE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
       AND NOT EXISTS (
