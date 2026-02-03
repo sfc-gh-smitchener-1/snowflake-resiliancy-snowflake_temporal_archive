@@ -700,6 +700,76 @@ def run_scd_load():
     except Exception as e:
         return None, str(e)
 
+def get_task_schedule_info():
+    """Get task schedule info including last/next run times"""
+    session = get_session()
+    try:
+        df = session.sql("""
+            SELECT 
+                NAME,
+                STATE,
+                SCHEDULE,
+                LAST_COMMITTED_ON,
+                -- Calculate next scheduled time based on CRON
+                CASE 
+                    WHEN NAME LIKE '%MORNING%' THEN 
+                        CASE 
+                            WHEN CURRENT_TIME() < '06:00:00' THEN 
+                                CONVERT_TIMEZONE('America/New_York', CURRENT_TIMESTAMP())::DATE || ' 06:00:00'
+                            ELSE 
+                                DATEADD('day', 1, CONVERT_TIMEZONE('America/New_York', CURRENT_TIMESTAMP())::DATE) || ' 06:00:00'
+                        END
+                    WHEN NAME LIKE '%EVENING%' THEN 
+                        CASE 
+                            WHEN CURRENT_TIME() < '18:00:00' THEN 
+                                CONVERT_TIMEZONE('America/New_York', CURRENT_TIMESTAMP())::DATE || ' 18:00:00'
+                            ELSE 
+                                DATEADD('day', 1, CONVERT_TIMEZONE('America/New_York', CURRENT_TIMESTAMP())::DATE) || ' 18:00:00'
+                        END
+                END AS NEXT_SCHEDULED_TIME_ET
+            FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
+                SCHEDULED_TIME_RANGE_START => DATEADD('day', -30, CURRENT_TIMESTAMP()),
+                RESULT_LIMIT => 100
+            ))
+            WHERE DATABASE_NAME = 'TEMPORAL_ARCHIVE'
+              AND SCHEMA_NAME = 'ARCHIVE'
+              AND NAME IN ('TASK_SCD_LOAD_MORNING', 'TASK_SCD_LOAD_EVENING')
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY NAME ORDER BY SCHEDULED_TIME DESC) = 1
+        """).to_pandas()
+        return df
+    except:
+        return pd.DataFrame()
+
+def get_task_status():
+    """Get current task status with schedule parsing"""
+    session = get_session()
+    try:
+        df = session.sql("""
+            SHOW TASKS IN SCHEMA TEMPORAL_ARCHIVE.ARCHIVE
+        """).to_pandas()
+        return df
+    except:
+        return pd.DataFrame()
+
+def get_last_load_info():
+    """Get info about the last successful load"""
+    session = get_session()
+    try:
+        df = session.sql("""
+            SELECT 
+                LOAD_TIMESTAMP AS LAST_LOAD_TIME,
+                ROWS_UPDATED,
+                ROWS_INSERTED,
+                STATUS,
+                DURATION_SECONDS
+            FROM TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG
+            ORDER BY LOAD_TIMESTAMP DESC
+            LIMIT 1
+        """).to_pandas()
+        return df
+    except:
+        return pd.DataFrame()
+
 def get_task_history():
     """Get recent task execution history"""
     session = get_session()
@@ -722,8 +792,52 @@ def get_task_history():
     except:
         return pd.DataFrame()
 
+def get_view_pk_mapping():
+    """Get the primary key mapping for dynamic discovery"""
+    session = get_session()
+    try:
+        df = session.sql("""
+            SELECT 
+                pk.SOURCE_SCHEMA,
+                pk.SOURCE_VIEW,
+                pk.PRIMARY_KEY_COLUMNS,
+                pk.IS_ACTIVE,
+                CASE WHEN v.TABLE_NAME IS NOT NULL THEN 'Yes' ELSE 'No' END AS VIEW_EXISTS
+            FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS pk
+            LEFT JOIN SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
+                ON v.TABLE_SCHEMA = pk.SOURCE_SCHEMA
+                AND v.TABLE_NAME = pk.SOURCE_VIEW
+            ORDER BY pk.SOURCE_SCHEMA, pk.SOURCE_VIEW
+        """).to_pandas()
+        return df
+    except:
+        return pd.DataFrame()
+
+def get_discovered_views_summary():
+    """Get summary of discovered vs mapped views"""
+    session = get_session()
+    try:
+        df = session.sql("""
+            SELECT 
+                v.TABLE_SCHEMA AS SCHEMA_NAME,
+                COUNT(v.TABLE_NAME) AS TOTAL_VIEWS,
+                COUNT(pk.SOURCE_VIEW) AS MAPPED_VIEWS,
+                COUNT(v.TABLE_NAME) - COUNT(pk.SOURCE_VIEW) AS UNMAPPED_VIEWS
+            FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
+            LEFT JOIN TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS pk
+                ON pk.SOURCE_SCHEMA = v.TABLE_SCHEMA
+                AND pk.SOURCE_VIEW = v.TABLE_NAME
+                AND pk.IS_ACTIVE = TRUE
+            WHERE v.TABLE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
+            GROUP BY v.TABLE_SCHEMA
+            ORDER BY v.TABLE_SCHEMA
+        """).to_pandas()
+        return df
+    except:
+        return pd.DataFrame()
+
 def render_operations():
-    """Render operations page with SCD load button"""
+    """Render operations page with SCD load button and task schedule info"""
     st.markdown("""
     <div class="main-header">
         <h1>⚙️ Operations</h1>
@@ -731,18 +845,114 @@ def render_operations():
     </div>
     """, unsafe_allow_html=True)
     
+    # Task Schedule Status Section
+    st.markdown("### 📅 Task Schedule Status")
+    
+    col_sched1, col_sched2, col_sched3 = st.columns(3)
+    
+    # Get last load info
+    last_load = get_last_load_info()
+    
+    with col_sched1:
+        st.markdown("""
+        <div class="metric-card">
+            <strong>⏰ Morning Task</strong>
+            <div style="font-size: 1.2rem;">6:00 AM ET Daily</div>
+            <small>TASK_SCD_LOAD_MORNING</small>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_sched2:
+        st.markdown("""
+        <div class="metric-card">
+            <strong>🌙 Evening Task</strong>
+            <div style="font-size: 1.2rem;">6:00 PM ET Daily</div>
+            <small>TASK_SCD_LOAD_EVENING</small>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_sched3:
+        if not last_load.empty:
+            last_time = last_load.iloc[0]['LAST_LOAD_TIME']
+            last_status = last_load.iloc[0]['STATUS']
+            status_color = "#22C55E" if last_status == "SUCCESS" else "#EF4444"
+            st.markdown(f"""
+            <div class="metric-card">
+                <strong>📊 Last Load</strong>
+                <div style="font-size: 1rem;">{last_time}</div>
+                <small style="color: {status_color};">{last_status}</small>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div class="metric-card">
+                <strong>📊 Last Load</strong>
+                <div style="font-size: 1rem;">No loads yet</div>
+                <small>Run your first load below</small>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Next scheduled runs based on current time
+    from datetime import datetime, time as dt_time
+    import pytz
+    
+    try:
+        et_tz = pytz.timezone('America/New_York')
+        now_et = datetime.now(et_tz)
+        today_et = now_et.date()
+        
+        morning_time = datetime.combine(today_et, dt_time(6, 0))
+        evening_time = datetime.combine(today_et, dt_time(18, 0))
+        
+        morning_time = et_tz.localize(morning_time)
+        evening_time = et_tz.localize(evening_time)
+        
+        # Calculate next morning run
+        if now_et.time() >= dt_time(6, 0):
+            next_morning = morning_time + pd.Timedelta(days=1)
+        else:
+            next_morning = morning_time
+        
+        # Calculate next evening run
+        if now_et.time() >= dt_time(18, 0):
+            next_evening = evening_time + pd.Timedelta(days=1)
+        else:
+            next_evening = evening_time
+        
+        # Determine which is truly next
+        if next_morning < next_evening:
+            next_run = next_morning
+            next_run_name = "Morning Load"
+        else:
+            next_run = next_evening
+            next_run_name = "Evening Load"
+        
+        # Calculate time until next run
+        time_until = next_run - now_et
+        hours_until = int(time_until.total_seconds() // 3600)
+        mins_until = int((time_until.total_seconds() % 3600) // 60)
+        
+        st.info(f"**Next Scheduled Run:** {next_run_name} at {next_run.strftime('%Y-%m-%d %H:%M')} ET (in {hours_until}h {mins_until}m)")
+    except Exception as e:
+        st.info("**Next Scheduled Run:** Morning (6 AM ET) or Evening (6 PM ET) - check task status below")
+    
+    st.divider()
+    
     # SCD Load Section
     col1, col2 = st.columns([2, 1])
     
     with col1:
         st.markdown("### 🚀 Run SCD Load On Demand")
         st.markdown("""
-        Click the button below to manually trigger an SCD Type 2 load for all registered tables.
-        This will:
-        - Read from SNOWFLAKE.ACCOUNT_USAGE views
-        - Compare with existing archive data using row hashes
-        - Close changed records (set `_IS_CURRENT = FALSE`)
-        - Insert new/changed records as current versions
+        Click the button below to manually trigger an SCD Type 2 load. The process **dynamically discovers**
+        all views from SNOWFLAKE.ACCOUNT_USAGE and SNOWFLAKE.ORGANIZATION_USAGE at runtime.
+        
+        **What happens:**
+        - Queries SNOWFLAKE.INFORMATION_SCHEMA.VIEWS to discover all available views
+        - Matches views against the primary key mapping table
+        - Creates target archive tables automatically if they don't exist
+        - Performs SCD Type 2 merge/insert for each mapped view
+        - Skips views without primary key mappings (logged in results)
         """)
         
         st.warning("**Note:** This operation may take several minutes depending on data volume.")
@@ -760,36 +970,48 @@ def render_operations():
                     st.success("SCD Load completed successfully!")
                     
                     # Display results
-                    col_a, col_b, col_c, col_d = st.columns(4)
+                    col_a, col_b, col_c, col_d, col_e = st.columns(5)
                     with col_a:
-                        st.metric("Tables Processed", result_dict.get('tables_processed', 0))
+                        st.metric("Views Discovered", result_dict.get('views_discovered', 0))
                     with col_b:
-                        st.metric("Rows Updated", result_dict.get('total_updated', 0))
+                        st.metric("Views Processed", result_dict.get('views_processed', 0))
                     with col_c:
-                        st.metric("Rows Inserted", result_dict.get('total_inserted', 0))
+                        st.metric("Rows Updated", result_dict.get('total_updated', 0))
                     with col_d:
+                        st.metric("Rows Inserted", result_dict.get('total_inserted', 0))
+                    with col_e:
                         st.metric("Errors", result_dict.get('error_count', 0))
+                    
+                    # Show skipped views if any
+                    if result_dict.get('skipped_views') and len(result_dict['skipped_views']) > 0:
+                        with st.expander(f"⚠️ Skipped Views ({result_dict.get('views_skipped', 0)})", expanded=False):
+                            st.json(result_dict['skipped_views'])
                     
                     # Show detailed results
                     if 'table_results' in result_dict:
-                        st.markdown("#### Detailed Results")
-                        st.json(result_dict['table_results'])
+                        with st.expander("📋 Detailed Results", expanded=False):
+                            st.json(result_dict['table_results'])
     
     with col2:
         st.markdown("### 📋 Quick Actions")
         
-        if st.button("🔄 Refresh Stats", use_container_width=True):
+        if st.button("🔄 Refresh Page", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
         
         st.markdown("---")
-        st.markdown("### 📊 Task Schedule")
-        st.markdown("""
-        | Task | Schedule |
-        |------|----------|
-        | Morning Load | 6:00 AM ET |
-        | Evening Load | 6:00 PM ET |
-        """)
+        
+        # View discovery summary
+        st.markdown("### 📊 View Discovery")
+        summary = get_discovered_views_summary()
+        if not summary.empty:
+            for _, row in summary.iterrows():
+                st.markdown(f"""
+                **{row['SCHEMA_NAME']}**  
+                {row['MAPPED_VIEWS']}/{row['TOTAL_VIEWS']} views mapped
+                """)
+        else:
+            st.info("Unable to load summary")
     
     st.divider()
     
@@ -813,27 +1035,29 @@ def render_operations():
     
     st.divider()
     
-    # Registry
-    st.markdown("### 📋 Table Registry")
-    session = get_session()
-    try:
-        registry_df = session.sql("""
-            SELECT 
-                SOURCE_SCHEMA,
-                SOURCE_VIEW,
-                TARGET_TABLE,
-                PRIMARY_KEY_COLUMNS,
-                IS_ACTIVE
-            FROM TEMPORAL_ARCHIVE.ARCHIVE.TABLE_REGISTRY
-            ORDER BY SOURCE_SCHEMA, SOURCE_VIEW
-        """).to_pandas()
+    # Primary Key Mapping Table
+    st.markdown("### 🔑 Primary Key Mappings")
+    st.markdown("""
+    Views are dynamically discovered from Snowflake. Only views with a primary key mapping below will be processed.
+    To add a new view, insert a row into `TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS`.
+    """)
+    
+    pk_mapping = get_view_pk_mapping()
+    if not pk_mapping.empty:
+        # Add filter
+        schema_filter = st.selectbox(
+            "Filter by Schema",
+            options=["All"] + list(pk_mapping['SOURCE_SCHEMA'].unique()),
+            key="pk_schema_filter"
+        )
         
-        if not registry_df.empty:
-            st.dataframe(registry_df, use_container_width=True)
-        else:
-            st.info("No tables registered in the registry.")
-    except Exception as e:
-        st.error(f"Could not load registry: {e}")
+        if schema_filter != "All":
+            pk_mapping = pk_mapping[pk_mapping['SOURCE_SCHEMA'] == schema_filter]
+        
+        st.dataframe(pk_mapping, use_container_width=True)
+        st.caption(f"Showing {len(pk_mapping)} mappings")
+    else:
+        st.info("No primary key mappings found.")
 
 
 # ============================================================================

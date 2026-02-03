@@ -474,29 +474,42 @@ The **Operations** page provides a UI for administrative tasks:
 │                            ⚙️ OPERATIONS PAGE                                       │
 ├─────────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                     │
+│   📅 TASK SCHEDULE STATUS                                                           │
+│   ┌───────────────────┬───────────────────┬───────────────────┐                     │
+│   │ ⏰ Morning Task    │ 🌙 Evening Task    │ 📊 Last Load       │                     │
+│   │ 6:00 AM ET Daily  │ 6:00 PM ET Daily  │ 2026-01-28 06:00  │                     │
+│   └───────────────────┴───────────────────┴───────────────────┘                     │
+│                                                                                     │
+│   ℹ️ Next Scheduled Run: Evening Load at 2026-01-28 18:00 ET (in 4h 32m)            │
+│                                                                                     │
+│   ─────────────────────────────────────────────────────────────────────────────     │
+│                                                                                     │
+│   🚀 RUN SCD LOAD ON DEMAND                                                         │
 │   ┌───────────────────────────────────────────────────────────────────────────────┐ │
-│   │  🚀 RUN SCD LOAD ON DEMAND                                                    │ │
-│   │                                                                               │ │
 │   │  [🔄 Run SCD Load Now]                                                        │ │
 │   │                                                                               │ │
 │   │  Results:                                                                     │ │
-│   │  ┌─────────────┬─────────────┬─────────────┬─────────────┐                    │ │
-│   │  │ Tables: 10  │ Updated: 50 │ Inserted: 0 │ Errors: 0   │                    │ │
-│   │  └─────────────┴─────────────┴─────────────┴─────────────┘                    │ │
+│   │  ┌───────────┬───────────┬───────────┬───────────┬───────────┐                │ │
+│   │  │ Discovered│ Processed │ Updated   │ Inserted  │ Errors    │                │ │
+│   │  │ 75        │ 68        │ 150       │ 45,000    │ 0         │                │ │
+│   │  └───────────┴───────────┴───────────┴───────────┴───────────┘                │ │
+│   │                                                                               │ │
+│   │  ⚠️ Skipped Views (7) [expand for details]                                    │ │
 │   └───────────────────────────────────────────────────────────────────────────────┘ │
 │                                                                                     │
-│   📜 RECENT LOAD HISTORY                                                            │
-│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
-│   │ Timestamp            │ Status  │ Updated │ Inserted │ Duration              │   │
-│   │ 2026-01-28 06:00:05  │ SUCCESS │ 1,250   │ 45,000   │ 45s                   │   │
-│   │ 2026-01-27 18:00:03  │ SUCCESS │ 890     │ 12,500   │ 32s                   │   │
-│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│   📊 VIEW DISCOVERY                   │ 📋 QUICK ACTIONS                            │
+│   ACCOUNT_USAGE: 58/65 mapped         │ [🔄 Refresh Page]                           │
+│   ORGANIZATION_USAGE: 10/13 mapped    │                                             │
 │                                                                                     │
-│   📋 TABLE REGISTRY                                                                 │
+│   ─────────────────────────────────────────────────────────────────────────────     │
+│                                                                                     │
+│   🔑 PRIMARY KEY MAPPINGS                                                           │
+│   Views are dynamically discovered. Only views with a PK mapping are processed.    │
 │   ┌─────────────────────────────────────────────────────────────────────────────┐   │
-│   │ Source                          │ Target                     │ Active       │   │
-│   │ SNOWFLAKE.ACCOUNT_USAGE.USERS   │ USERS_ARCHIVE              │ ✓            │   │
-│   │ SNOWFLAKE.ACCOUNT_USAGE.ROLES   │ ROLES_ARCHIVE              │ ✓            │   │
+│   │ Schema          │ View                    │ Primary Key       │ Active      │   │
+│   │ ACCOUNT_USAGE   │ QUERY_HISTORY           │ QUERY_ID          │ ✓           │   │
+│   │ ACCOUNT_USAGE   │ USERS                   │ USER_ID           │ ✓           │   │
+│   │ ACCOUNT_USAGE   │ LOGIN_HISTORY           │ EVENT_ID          │ ✓           │   │
 │   └─────────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                     │
 └─────────────────────────────────────────────────────────────────────────────────────┘
@@ -1025,38 +1038,85 @@ SHA2(CONCAT_WS('|',
 - `::VARCHAR` cast - Ensures all types are comparable as strings
 - SHA-256 - Cryptographic hash with negligible collision probability
 
-### Table Registry Pattern
+### Dynamic View Discovery
 
-The `TABLE_REGISTRY` table drives the entire SCD process:
+The SCD load process **dynamically discovers views at runtime** from `SNOWFLAKE.INFORMATION_SCHEMA.VIEWS`. This means:
+
+- **No hardcoded list of views** - new views are automatically detected
+- **Primary key mappings required** - views need a PK mapping to be processed
+- **Automatic table creation** - target archive tables are created on first load
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                          DYNAMIC VIEW DISCOVERY FLOW                                │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                     │
+│   1. Query SNOWFLAKE.INFORMATION_SCHEMA.VIEWS                                       │
+│      WHERE TABLE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')                  │
+│                        ↓                                                            │
+│   2. LEFT JOIN to VIEW_PRIMARY_KEYS mapping table                                   │
+│                        ↓                                                            │
+│   3. For each view with a PK mapping:                                               │
+│      • Create target table if not exists (TEMPORAL_ARCHIVE.{schema}.{view}_ARCHIVE) │
+│      • Run SCD Type 2 load                                                          │
+│                        ↓                                                            │
+│   4. Views without PK mapping → logged and skipped                                  │
+│                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### VIEW_PRIMARY_KEYS Table
+
+The `VIEW_PRIMARY_KEYS` table maps source views to their primary key columns:
 
 ```sql
 ┌──────────────────────────────────────────────────────────────────────────────────────────┐
-│                              TABLE_REGISTRY SCHEMA                                       │
+│                           VIEW_PRIMARY_KEYS SCHEMA                                       │
 ├──────────────────────────────────────────────────────────────────────────────────────────┤
-│ REGISTRY_ID           │ Auto-increment primary key                                       │
-│ SOURCE_DATABASE       │ e.g., 'SNOWFLAKE'                                                │
-│ SOURCE_SCHEMA         │ e.g., 'ACCOUNT_USAGE'                                            │
+│ SOURCE_SCHEMA         │ e.g., 'ACCOUNT_USAGE' or 'ORGANIZATION_USAGE'                    │
 │ SOURCE_VIEW           │ e.g., 'QUERY_HISTORY'                                            │
-│ TARGET_DATABASE       │ e.g., 'TEMPORAL_ARCHIVE'                                         │
-│ TARGET_SCHEMA         │ e.g., 'ACCOUNT_USAGE'                                            │
-│ TARGET_TABLE          │ e.g., 'QUERY_HISTORY_ARCHIVE'                                    │
 │ PRIMARY_KEY_COLUMNS   │ Comma-separated PKs, e.g., 'QUERY_ID' or 'START_TIME,WAREHOUSE_ID'│
-│ IS_ACTIVE             │ Boolean flag to enable/disable specific tables                   │
+│ IS_ACTIVE             │ Boolean flag to enable/disable specific views                    │
 └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**To add a new table:**
+**To add a new view to the archive:**
 ```sql
-INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.TABLE_REGISTRY 
-    (SOURCE_DATABASE, SOURCE_SCHEMA, SOURCE_VIEW, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, PRIMARY_KEY_COLUMNS)
+INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS 
+    (SOURCE_SCHEMA, SOURCE_VIEW, PRIMARY_KEY_COLUMNS)
 VALUES 
-    ('SNOWFLAKE', 'ACCOUNT_USAGE', 'NEW_VIEW', 'TEMPORAL_ARCHIVE', 'ACCOUNT_USAGE', 'NEW_VIEW_ARCHIVE', 'PK_COLUMN');
+    ('ACCOUNT_USAGE', 'NEW_VIEW_NAME', 'PRIMARY_KEY_COLUMN');
+```
+
+**To disable a view:**
+```sql
+UPDATE TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS 
+SET IS_ACTIVE = FALSE 
+WHERE SOURCE_VIEW = 'VIEW_TO_DISABLE';
 ```
 
 The next SCD load will automatically:
-1. Dynamically discover source columns via `INFORMATION_SCHEMA`
-2. Create the target table if it doesn't exist (with SCD columns)
-3. Load data using SCD Type 2 logic
+1. Discover the new view from SNOWFLAKE.INFORMATION_SCHEMA
+2. Match it to the PK mapping you just added
+3. Create the target table (`NEW_VIEW_NAME_ARCHIVE`) with SCD columns
+4. Load data using SCD Type 2 logic
+
+#### Pre-seeded Primary Keys
+
+The deployment script includes PK mappings for ~70 common ACCOUNT_USAGE and ORGANIZATION_USAGE views. Check the current mappings:
+
+```sql
+SELECT SOURCE_SCHEMA, SOURCE_VIEW, PRIMARY_KEY_COLUMNS, IS_ACTIVE
+FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS
+ORDER BY SOURCE_SCHEMA, SOURCE_VIEW;
+```
+
+#### Handling New Snowflake Views
+
+When Snowflake adds new views to ACCOUNT_USAGE or ORGANIZATION_USAGE:
+1. They are automatically discovered on the next SCD load run
+2. They appear in the "skipped views" section of the load results
+3. Add a PK mapping to include them in future loads
 
 ### Streamlit Operations Page
 
