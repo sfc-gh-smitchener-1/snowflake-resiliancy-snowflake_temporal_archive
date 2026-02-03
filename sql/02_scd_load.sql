@@ -450,39 +450,52 @@ DECLARE
     error_count INTEGER DEFAULT 0;
     views_processed INTEGER DEFAULT 0;
     views_skipped INTEGER DEFAULT 0;
-    v_call_sql VARCHAR;
-    -- Cursor for iterating through PK mappings
-    c_views CURSOR FOR 
-        SELECT 
-            SOURCE_SCHEMA,
-            SOURCE_VIEW,
-            PRIMARY_KEY_COLUMNS,
-            SOURCE_VIEW || '_ARCHIVE' AS TARGET_TABLE
-        FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS
-        WHERE SOURCE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
-          AND IS_ACTIVE = TRUE
-        ORDER BY SOURCE_SCHEMA, SOURCE_VIEW;
+    v_source_schema VARCHAR;
+    v_source_view VARCHAR;
+    v_target_table VARCHAR;
+    v_pk_columns VARCHAR;
+    v_count INTEGER;
+    res RESULTSET;
+    cur CURSOR FOR res;
 BEGIN
     start_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
     
     -- ==========================================================================
     -- PHASE 1: Process views that HAVE primary key mappings
+    -- Use RESULTSET pattern for dynamic query execution
     -- ==========================================================================
     
-    OPEN c_views;
-    FOR rec IN c_views DO
-        -- Build dynamic CALL statement
-        v_call_sql := 'CALL TEMPORAL_ARCHIVE.ARCHIVE.LOAD_TABLE_SCD(' ||
-            '''SNOWFLAKE'', ' ||
-            '''' || rec.SOURCE_SCHEMA || ''', ' ||
-            '''' || rec.SOURCE_VIEW || ''', ' ||
-            '''TEMPORAL_ARCHIVE'', ' ||
-            '''' || rec.SOURCE_SCHEMA || ''', ' ||
-            '''' || rec.TARGET_TABLE || ''', ' ||
-            '''' || rec.PRIMARY_KEY_COLUMNS || ''')';
+    res := (EXECUTE IMMEDIATE '
+        SELECT 
+            SOURCE_SCHEMA,
+            SOURCE_VIEW,
+            PRIMARY_KEY_COLUMNS
+        FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS
+        WHERE SOURCE_SCHEMA IN (''ACCOUNT_USAGE'', ''ORGANIZATION_USAGE'')
+          AND IS_ACTIVE = TRUE
+        ORDER BY SOURCE_SCHEMA, SOURCE_VIEW
+    ');
+    
+    OPEN cur;
+    LOOP
+        FETCH cur INTO v_source_schema, v_source_view, v_pk_columns;
+        IF (NOT FOUND) THEN
+            LEAVE;
+        END IF;
         
-        -- Execute the call and capture result
-        EXECUTE IMMEDIATE v_call_sql INTO :table_result;
+        -- Construct target table name
+        v_target_table := v_source_view || '_ARCHIVE';
+        
+        -- Call the SCD load procedure directly with variables
+        CALL TEMPORAL_ARCHIVE.ARCHIVE.LOAD_TABLE_SCD(
+            'SNOWFLAKE',
+            :v_source_schema,
+            :v_source_view,
+            'TEMPORAL_ARCHIVE',
+            :v_source_schema,
+            :v_target_table,
+            :v_pk_columns
+        ) INTO table_result;
         
         results := ARRAY_APPEND(results, table_result);
         views_processed := views_processed + 1;
@@ -493,21 +506,28 @@ BEGIN
         ELSE
             error_count := error_count + 1;
         END IF;
-    END FOR;
-    CLOSE c_views;
+    END LOOP;
+    CLOSE cur;
     
     -- ==========================================================================
-    -- PHASE 2: Count unmapped views (don't iterate, just get count)
+    -- PHASE 2: Count unmapped views
     -- ==========================================================================
     
-    SELECT COUNT(*) INTO :views_skipped
-    FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
-    WHERE v.TABLE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
-      AND NOT EXISTS (
-          SELECT 1 FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS pk
-          WHERE pk.SOURCE_SCHEMA = v.TABLE_SCHEMA
-            AND pk.SOURCE_VIEW = v.TABLE_NAME
-      );
+    res := (EXECUTE IMMEDIATE '
+        SELECT COUNT(*) 
+        FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
+        WHERE v.TABLE_SCHEMA IN (''ACCOUNT_USAGE'', ''ORGANIZATION_USAGE'')
+          AND NOT EXISTS (
+              SELECT 1 FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS pk
+              WHERE pk.SOURCE_SCHEMA = v.TABLE_SCHEMA
+                AND pk.SOURCE_VIEW = v.TABLE_NAME
+          )
+    ');
+    
+    OPEN cur;
+    FETCH cur INTO v_count;
+    CLOSE cur;
+    views_skipped := v_count;
     
     -- Add a single summary entry for skipped views
     IF (views_skipped > 0) THEN
@@ -527,11 +547,11 @@ BEGIN
     VALUES (
         'DYNAMIC_DISCOVERY',
         'ALL_TABLES',
-        total_updated,
-        total_inserted,
-        CASE WHEN error_count = 0 THEN 'SUCCESS' ELSE 'PARTIAL_FAILURE' END,
-        TIMESTAMPDIFF('SECOND', start_time, end_time),
-        SHA2('DYNAMIC' || views_processed || total_updated || total_inserted, 256)
+        :total_updated,
+        :total_inserted,
+        CASE WHEN :error_count = 0 THEN 'SUCCESS' ELSE 'PARTIAL_FAILURE' END,
+        TIMESTAMPDIFF('SECOND', :start_time, :end_time),
+        SHA2('DYNAMIC' || :views_processed || :total_updated || :total_inserted, 256)
     );
     
     RETURN OBJECT_CONSTRUCT(
