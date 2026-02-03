@@ -31,24 +31,25 @@ AS
 $$
 DECLARE
     column_list VARCHAR DEFAULT '';
-    v_info_schema VARCHAR;
+    v_sql VARCHAR;
+    res RESULTSET;
+    cur CURSOR FOR res;
 BEGIN
-    v_info_schema := p_source_database || '.INFORMATION_SCHEMA.COLUMNS';
+    v_sql := 'SELECT COLUMN_NAME FROM ' || p_source_database || '.INFORMATION_SCHEMA.COLUMNS ' ||
+             'WHERE TABLE_SCHEMA = ''' || p_source_schema || ''' ' ||
+             'AND TABLE_NAME = ''' || p_source_view || ''' ' ||
+             'AND COLUMN_NAME NOT IN (''_LOADED_AT'', ''_SOURCE_SYSTEM'', ''_SOURCE_TABLE'', ''_ROW_HASH'', ' ||
+             '''_IS_CURRENT'', ''_VALID_FROM'', ''_VALID_TO'') ' ||
+             'ORDER BY ORDINAL_POSITION';
     
-    FOR col IN (
-        SELECT COLUMN_NAME 
-        FROM IDENTIFIER(v_info_schema)
-        WHERE TABLE_SCHEMA = p_source_schema
-          AND TABLE_NAME = p_source_view
-          AND COLUMN_NAME NOT IN ('_LOADED_AT', '_SOURCE_SYSTEM', '_SOURCE_TABLE', '_ROW_HASH', 
-                                  '_IS_CURRENT', '_VALID_FROM', '_VALID_TO')
-        ORDER BY ORDINAL_POSITION
-    )
-    DO
+    res := (EXECUTE IMMEDIATE :v_sql);
+    OPEN cur;
+    
+    FOR rec IN cur DO
         IF (column_list != '') THEN
             column_list := column_list || ', ';
         END IF;
-        column_list := column_list || '"' || col.COLUMN_NAME || '"';
+        column_list := column_list || '"' || rec.COLUMN_NAME || '"';
     END FOR;
     
     RETURN column_list;
