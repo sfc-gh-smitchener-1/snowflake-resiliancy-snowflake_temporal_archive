@@ -256,11 +256,7 @@ DECLARE
     target_fqn VARCHAR;
     source_fqn VARCHAR;
     create_sql VARCHAR;
-    table_exists INTEGER DEFAULT 0;
-    check_sql VARCHAR;
-    v_count INTEGER;
-    res RESULTSET;
-    cur CURSOR FOR res;
+    v_count INTEGER DEFAULT 0;
 BEGIN
     -- Copy parameters to local variables
     v_src_db := p_source_database;
@@ -273,18 +269,13 @@ BEGIN
     target_fqn := v_tgt_db || '.' || v_tgt_schema || '.' || v_tgt_table;
     source_fqn := v_src_db || '.' || v_src_schema || '.' || v_src_view;
     
-    -- Check if table exists
-    check_sql := 'SELECT COUNT(*) AS CNT FROM ' || v_tgt_db || '.INFORMATION_SCHEMA.TABLES ' ||
-                 'WHERE TABLE_SCHEMA = ''' || v_tgt_schema || ''' ' ||
-                 'AND TABLE_NAME = ''' || v_tgt_table || '''';
+    -- Check if table exists using static query against TEMPORAL_ARCHIVE's INFORMATION_SCHEMA
+    SELECT COUNT(*) INTO :v_count
+    FROM TEMPORAL_ARCHIVE.INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA = :v_tgt_schema
+      AND TABLE_NAME = :v_tgt_table;
     
-    res := (EXECUTE IMMEDIATE :check_sql);
-    OPEN cur;
-    FETCH cur INTO v_count;
-    CLOSE cur;
-    table_exists := v_count;
-    
-    IF (table_exists = 0) THEN
+    IF (v_count = 0) THEN
         -- Create schema if not exists
         EXECUTE IMMEDIATE 'CREATE SCHEMA IF NOT EXISTS ' || v_tgt_db || '.' || v_tgt_schema;
         
