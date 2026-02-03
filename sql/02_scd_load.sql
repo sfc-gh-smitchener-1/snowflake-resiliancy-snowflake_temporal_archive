@@ -155,6 +155,7 @@ COMMENT = 'Log of SCD load executions';
 
 -- =============================================================================
 -- PROCEDURE 1: GET_SOURCE_COLUMNS
+-- Uses LISTAGG to get all column names in one query - avoids cursor issues
 -- =============================================================================
 
 CREATE OR REPLACE PROCEDURE TEMPORAL_ARCHIVE.ARCHIVE.GET_SOURCE_COLUMNS(
@@ -169,39 +170,25 @@ AS
 $$
 DECLARE
     column_list VARCHAR DEFAULT '';
-    v_sql VARCHAR;
     v_db VARCHAR;
     v_schema VARCHAR;
     v_view VARCHAR;
-    v_col_name VARCHAR;
-    res RESULTSET;
-    cur CURSOR FOR res;
+    v_sql VARCHAR;
 BEGIN
     -- Copy parameters to local variables
     v_db := p_source_database;
     v_schema := p_source_schema;
     v_view := p_source_view;
     
-    v_sql := 'SELECT COLUMN_NAME FROM ' || v_db || '.INFORMATION_SCHEMA.COLUMNS ' ||
+    -- Use LISTAGG to get all columns in one query
+    v_sql := 'SELECT LISTAGG(''"'' || COLUMN_NAME || ''"'', '', '') WITHIN GROUP (ORDER BY ORDINAL_POSITION) ' ||
+             'FROM ' || v_db || '.INFORMATION_SCHEMA.COLUMNS ' ||
              'WHERE TABLE_SCHEMA = ''' || v_schema || ''' ' ||
              'AND TABLE_NAME = ''' || v_view || ''' ' ||
              'AND COLUMN_NAME NOT IN (''_LOADED_AT'', ''_SOURCE_SYSTEM'', ''_SOURCE_TABLE'', ''_ROW_HASH'', ' ||
-             '''_IS_CURRENT'', ''_VALID_FROM'', ''_VALID_TO'') ' ||
-             'ORDER BY ORDINAL_POSITION';
+             '''_IS_CURRENT'', ''_VALID_FROM'', ''_VALID_TO'')';
     
-    res := (EXECUTE IMMEDIATE :v_sql);
-    OPEN cur;
-    
-    FETCH cur INTO v_col_name;
-    WHILE (v_col_name IS NOT NULL) DO
-        IF (column_list != '') THEN
-            column_list := column_list || ', ';
-        END IF;
-        column_list := column_list || '"' || v_col_name || '"';
-        v_col_name := NULL;
-        FETCH cur INTO v_col_name;
-    END WHILE;
-    CLOSE cur;
+    EXECUTE IMMEDIATE v_sql INTO :column_list;
     
     RETURN column_list;
 END;
