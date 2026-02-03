@@ -173,7 +173,6 @@ DECLARE
     v_db VARCHAR;
     v_schema VARCHAR;
     v_view VARCHAR;
-    v_sql VARCHAR;
 BEGIN
     -- Copy parameters to local variables
     v_db := p_source_database;
@@ -181,14 +180,15 @@ BEGIN
     v_view := p_source_view;
     
     -- Use LISTAGG to get all columns in one query
-    v_sql := 'SELECT LISTAGG(''"'' || COLUMN_NAME || ''"'', '', '') WITHIN GROUP (ORDER BY ORDINAL_POSITION) ' ||
-             'FROM ' || v_db || '.INFORMATION_SCHEMA.COLUMNS ' ||
-             'WHERE TABLE_SCHEMA = ''' || v_schema || ''' ' ||
-             'AND TABLE_NAME = ''' || v_view || ''' ' ||
-             'AND COLUMN_NAME NOT IN (''_LOADED_AT'', ''_SOURCE_SYSTEM'', ''_SOURCE_TABLE'', ''_ROW_HASH'', ' ||
-             '''_IS_CURRENT'', ''_VALID_FROM'', ''_VALID_TO'')';
-    
-    EXECUTE IMMEDIATE v_sql INTO :column_list;
+    -- Query TEMPORAL_ARCHIVE's copy of INFORMATION_SCHEMA won't work, so query SNOWFLAKE directly
+    SELECT LISTAGG('"' || COLUMN_NAME || '"', ', ') WITHIN GROUP (ORDER BY ORDINAL_POSITION)
+    INTO :column_list
+    FROM SNOWFLAKE.INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_CATALOG = :v_db
+      AND TABLE_SCHEMA = :v_schema
+      AND TABLE_NAME = :v_view
+      AND COLUMN_NAME NOT IN ('_LOADED_AT', '_SOURCE_SYSTEM', '_SOURCE_TABLE', '_ROW_HASH', 
+                              '_IS_CURRENT', '_VALID_FROM', '_VALID_TO');
     
     RETURN column_list;
 END;
