@@ -477,10 +477,11 @@ BEGIN
     ');
     
     OPEN cur;
+    <<fetch_loop>>
     LOOP
         FETCH cur INTO v_source_schema, v_source_view, v_pk_columns;
-        IF (NOT FOUND) THEN
-            LEAVE;
+        IF (SQLCODE != 0) THEN
+            LEAVE fetch_loop;
         END IF;
         
         -- Construct target table name
@@ -506,7 +507,7 @@ BEGIN
         ELSE
             error_count := error_count + 1;
         END IF;
-    END LOOP;
+    END LOOP fetch_loop;
     CLOSE cur;
     
     -- ==========================================================================
