@@ -792,45 +792,42 @@ def get_task_history():
     except:
         return pd.DataFrame()
 
-def get_view_pk_mapping():
-    """Get the primary key mapping for dynamic discovery"""
-    session = get_session()
-    try:
-        df = session.sql("""
-            SELECT 
-                pk.SOURCE_SCHEMA,
-                pk.SOURCE_VIEW,
-                pk.PRIMARY_KEY_COLUMNS,
-                pk.IS_ACTIVE,
-                CASE WHEN v.TABLE_NAME IS NOT NULL THEN 'Yes' ELSE 'No' END AS VIEW_EXISTS
-            FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS pk
-            LEFT JOIN SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
-                ON v.TABLE_SCHEMA = pk.SOURCE_SCHEMA
-                AND v.TABLE_NAME = pk.SOURCE_VIEW
-            ORDER BY pk.SOURCE_SCHEMA, pk.SOURCE_VIEW
-        """).to_pandas()
-        return df
-    except:
-        return pd.DataFrame()
-
 def get_discovered_views_summary():
-    """Get summary of discovered vs mapped views"""
+    """Get summary of discovered views and their archive status"""
     session = get_session()
     try:
         df = session.sql("""
             SELECT 
                 v.TABLE_SCHEMA AS SCHEMA_NAME,
                 COUNT(v.TABLE_NAME) AS TOTAL_VIEWS,
-                COUNT(pk.SOURCE_VIEW) AS MAPPED_VIEWS,
-                COUNT(v.TABLE_NAME) - COUNT(pk.SOURCE_VIEW) AS UNMAPPED_VIEWS
+                COUNT(t.TABLE_NAME) AS ARCHIVED_VIEWS,
+                COUNT(v.TABLE_NAME) - COUNT(t.TABLE_NAME) AS PENDING_VIEWS
             FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
-            LEFT JOIN TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS pk
-                ON pk.SOURCE_SCHEMA = v.TABLE_SCHEMA
-                AND pk.SOURCE_VIEW = v.TABLE_NAME
-                AND pk.IS_ACTIVE = TRUE
+            LEFT JOIN TEMPORAL_ARCHIVE.INFORMATION_SCHEMA.TABLES t
+                ON t.TABLE_SCHEMA = v.TABLE_SCHEMA
+                AND t.TABLE_NAME = v.TABLE_NAME || '_ARCHIVE'
             WHERE v.TABLE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
             GROUP BY v.TABLE_SCHEMA
             ORDER BY v.TABLE_SCHEMA
+        """).to_pandas()
+        return df
+    except:
+        return pd.DataFrame()
+
+def get_archive_table_list():
+    """Get list of archive tables with row counts"""
+    session = get_session()
+    try:
+        df = session.sql("""
+            SELECT 
+                TABLE_SCHEMA,
+                TABLE_NAME,
+                ROW_COUNT,
+                BYTES,
+                CREATED
+            FROM TEMPORAL_ARCHIVE.INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_NAME LIKE '%_ARCHIVE'
+            ORDER BY TABLE_SCHEMA, TABLE_NAME
         """).to_pandas()
         return df
     except:
@@ -945,14 +942,14 @@ def render_operations():
         st.markdown("### 🚀 Run SCD Load On Demand")
         st.markdown("""
         Click the button below to manually trigger an SCD Type 2 load. The process **dynamically discovers**
-        all views from SNOWFLAKE.ACCOUNT_USAGE and SNOWFLAKE.ORGANIZATION_USAGE at runtime.
+        ALL views from SNOWFLAKE.ACCOUNT_USAGE and SNOWFLAKE.ORGANIZATION_USAGE at runtime.
         
         **What happens:**
         - Queries SNOWFLAKE.INFORMATION_SCHEMA.VIEWS to discover all available views
-        - Matches views against the primary key mapping table
         - Creates target archive tables automatically if they don't exist
-        - Performs SCD Type 2 merge/insert for each mapped view
-        - Skips views without primary key mappings (logged in results)
+        - Uses surrogate key (`_ARCHIVE_ID`) - no PK mappings needed
+        - Uses row hash (`SHA2(OBJECT_CONSTRUCT(*))`) for change detection
+        - Performs SCD Type 2 merge/insert for EVERY view
         """)
         
         st.warning("**Note:** This operation may take several minutes depending on data volume.")
@@ -972,20 +969,15 @@ def render_operations():
                     # Display results
                     col_a, col_b, col_c, col_d, col_e = st.columns(5)
                     with col_a:
-                        st.metric("Views Discovered", result_dict.get('views_discovered', 0))
-                    with col_b:
                         st.metric("Views Processed", result_dict.get('views_processed', 0))
+                    with col_b:
+                        st.metric("Successful", result_dict.get('success_count', 0))
                     with col_c:
                         st.metric("Rows Updated", result_dict.get('total_updated', 0))
                     with col_d:
                         st.metric("Rows Inserted", result_dict.get('total_inserted', 0))
                     with col_e:
                         st.metric("Errors", result_dict.get('error_count', 0))
-                    
-                    # Show skipped views if any
-                    if result_dict.get('skipped_views') and len(result_dict['skipped_views']) > 0:
-                        with st.expander(f"⚠️ Skipped Views ({result_dict.get('views_skipped', 0)})", expanded=False):
-                            st.json(result_dict['skipped_views'])
                     
                     # Show detailed results
                     if 'table_results' in result_dict:
@@ -1008,7 +1000,7 @@ def render_operations():
             for _, row in summary.iterrows():
                 st.markdown(f"""
                 **{row['SCHEMA_NAME']}**  
-                {row['MAPPED_VIEWS']}/{row['TOTAL_VIEWS']} views mapped
+                {row['ARCHIVED_VIEWS']}/{row['TOTAL_VIEWS']} views archived
                 """)
         else:
             st.info("Unable to load summary")
@@ -1035,29 +1027,33 @@ def render_operations():
     
     st.divider()
     
-    # Primary Key Mapping Table
-    st.markdown("### 🔑 Primary Key Mappings")
+    # Archive Tables
+    st.markdown("### 📦 Archive Tables")
     st.markdown("""
-    Views are dynamically discovered from Snowflake. Only views with a primary key mapping below will be processed.
-    To add a new view, insert a row into `TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS`.
+    All views are automatically discovered and archived using surrogate keys. 
+    No PK mapping required - the system uses row hashing for change detection.
     """)
     
-    pk_mapping = get_view_pk_mapping()
-    if not pk_mapping.empty:
+    archive_tables = get_archive_table_list()
+    if not archive_tables.empty:
         # Add filter
         schema_filter = st.selectbox(
             "Filter by Schema",
-            options=["All"] + list(pk_mapping['SOURCE_SCHEMA'].unique()),
-            key="pk_schema_filter"
+            options=["All"] + list(archive_tables['TABLE_SCHEMA'].unique()),
+            key="archive_schema_filter"
         )
         
         if schema_filter != "All":
-            pk_mapping = pk_mapping[pk_mapping['SOURCE_SCHEMA'] == schema_filter]
+            archive_tables = archive_tables[archive_tables['TABLE_SCHEMA'] == schema_filter]
         
-        st.dataframe(pk_mapping, use_container_width=True)
-        st.caption(f"Showing {len(pk_mapping)} mappings")
+        # Format bytes
+        archive_tables['SIZE_MB'] = (archive_tables['BYTES'] / 1024 / 1024).round(2)
+        display_df = archive_tables[['TABLE_SCHEMA', 'TABLE_NAME', 'ROW_COUNT', 'SIZE_MB', 'CREATED']]
+        
+        st.dataframe(display_df, use_container_width=True)
+        st.caption(f"Showing {len(archive_tables)} archive tables")
     else:
-        st.info("No primary key mappings found.")
+        st.info("No archive tables found. Run SCD load to create them.")
 
 
 # ============================================================================
