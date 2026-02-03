@@ -269,7 +269,7 @@ def render_sidebar():
         page = st.radio(
             "Navigation",
             ["🏠 Dashboard", "🔍 Archive Explorer", "💰 Cost Analytics", 
-             "🔒 Security Audit", "🤖 Cortex Analyst", "ℹ️ About"],
+             "🔒 Security Audit", "🤖 Cortex Analyst", "⚙️ Operations", "ℹ️ About"],
             label_visibility="collapsed"
         )
         
@@ -686,6 +686,157 @@ def render_about():
     """)
 
 # ============================================================================
+# PAGE: OPERATIONS
+# ============================================================================
+
+def run_scd_load():
+    """Execute the SCD load procedure"""
+    session = get_session()
+    try:
+        result = session.sql("CALL TEMPORAL_ARCHIVE.ARCHIVE.RUN_SCD_LOAD()").collect()
+        if result:
+            return result[0][0], None
+        return None, "No result returned"
+    except Exception as e:
+        return None, str(e)
+
+def get_task_history():
+    """Get recent task execution history"""
+    session = get_session()
+    try:
+        df = session.sql("""
+            SELECT 
+                NAME,
+                STATE,
+                SCHEDULED_TIME,
+                COMPLETED_TIME,
+                ERROR_MESSAGE
+            FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
+                SCHEDULED_TIME_RANGE_START => DATEADD('day', -7, CURRENT_TIMESTAMP()),
+                RESULT_LIMIT => 20
+            ))
+            WHERE DATABASE_NAME = 'TEMPORAL_ARCHIVE'
+            ORDER BY SCHEDULED_TIME DESC
+        """).to_pandas()
+        return df
+    except:
+        return pd.DataFrame()
+
+def render_operations():
+    """Render operations page with SCD load button"""
+    st.markdown("""
+    <div class="main-header">
+        <h1>⚙️ Operations</h1>
+        <p>Run SCD loads on demand and monitor task execution</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # SCD Load Section
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.markdown("### 🚀 Run SCD Load On Demand")
+        st.markdown("""
+        Click the button below to manually trigger an SCD Type 2 load for all registered tables.
+        This will:
+        - Read from SNOWFLAKE.ACCOUNT_USAGE views
+        - Compare with existing archive data using row hashes
+        - Close changed records (set `_IS_CURRENT = FALSE`)
+        - Insert new/changed records as current versions
+        """)
+        
+        st.warning("**Note:** This operation may take several minutes depending on data volume.")
+        
+        if st.button("🔄 Run SCD Load Now", type="primary", use_container_width=True):
+            with st.spinner("Running SCD load... This may take a few minutes."):
+                result, error = run_scd_load()
+                
+                if error:
+                    st.error(f"Error: {error}")
+                elif result:
+                    import json
+                    result_dict = json.loads(result) if isinstance(result, str) else result
+                    
+                    st.success("SCD Load completed successfully!")
+                    
+                    # Display results
+                    col_a, col_b, col_c, col_d = st.columns(4)
+                    with col_a:
+                        st.metric("Tables Processed", result_dict.get('tables_processed', 0))
+                    with col_b:
+                        st.metric("Rows Updated", result_dict.get('total_updated', 0))
+                    with col_c:
+                        st.metric("Rows Inserted", result_dict.get('total_inserted', 0))
+                    with col_d:
+                        st.metric("Errors", result_dict.get('error_count', 0))
+                    
+                    # Show detailed results
+                    if 'table_results' in result_dict:
+                        st.markdown("#### Detailed Results")
+                        st.json(result_dict['table_results'])
+    
+    with col2:
+        st.markdown("### 📋 Quick Actions")
+        
+        if st.button("🔄 Refresh Stats", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+        
+        st.markdown("---")
+        st.markdown("### 📊 Task Schedule")
+        st.markdown("""
+        | Task | Schedule |
+        |------|----------|
+        | Morning Load | 6:00 AM ET |
+        | Evening Load | 6:00 PM ET |
+        """)
+    
+    st.divider()
+    
+    # Load History
+    st.markdown("### 📜 Recent Load History")
+    history = get_load_history()
+    if not history.empty:
+        st.dataframe(history, use_container_width=True)
+    else:
+        st.info("No load history available yet.")
+    
+    st.divider()
+    
+    # Task Execution History
+    st.markdown("### ⏱️ Task Execution History (Last 7 Days)")
+    task_history = get_task_history()
+    if not task_history.empty:
+        st.dataframe(task_history, use_container_width=True)
+    else:
+        st.info("No task execution history available.")
+    
+    st.divider()
+    
+    # Registry
+    st.markdown("### 📋 Table Registry")
+    session = get_session()
+    try:
+        registry_df = session.sql("""
+            SELECT 
+                SOURCE_SCHEMA,
+                SOURCE_VIEW,
+                TARGET_TABLE,
+                PRIMARY_KEY_COLUMNS,
+                IS_ACTIVE
+            FROM TEMPORAL_ARCHIVE.ARCHIVE.TABLE_REGISTRY
+            ORDER BY SOURCE_SCHEMA, SOURCE_VIEW
+        """).to_pandas()
+        
+        if not registry_df.empty:
+            st.dataframe(registry_df, use_container_width=True)
+        else:
+            st.info("No tables registered in the registry.")
+    except Exception as e:
+        st.error(f"Could not load registry: {e}")
+
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
@@ -703,6 +854,8 @@ def main():
         render_security_audit()
     elif page == "🤖 Cortex Analyst":
         render_cortex_page()
+    elif page == "⚙️ Operations":
+        render_operations()
     elif page == "ℹ️ About":
         render_about()
 

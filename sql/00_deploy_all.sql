@@ -12,7 +12,7 @@
 --
 -- Deployment Order:
 --   1. 01_initial_setup.sql     - Creates DATA_ADMIN role, database, warehouse
---   2. 02_scd_load_procedure.sql - SCD Type 2 procedures and Tasks
+--   2. 02_scd_load.sql          - SCD Type 2 procedures and Tasks
 --   3. 03_semantic_layer.sql    - Semantic Views for Cortex Analyst
 --   4. 04_streamlit_ddl.sql     - Streamlit support objects
 --   5. 05_streamlit_app.sql     - Streamlit application deployment
@@ -65,7 +65,7 @@ SELECT '>>> Step 1: Running initial setup (creates DATA_ADMIN role, database, ba
 
 SELECT '>>> Step 2: Creating SCD Type 2 load procedures and scheduled Tasks...' AS STATUS;
 
--- Run: sql/02_scd_load_procedure.sql (as DATA_ADMIN)
+-- Run: sql/02_scd_load.sql (as DATA_ADMIN)
 -- This creates:
 --   - TABLE_REGISTRY for source-to-target mappings
 --   - RUN_SCD_LOAD() main procedure
@@ -156,7 +156,7 @@ USE ROLE ACCOUNTADMIN;
 USE ROLE DATA_ADMIN;
 
 -- Step 2: SCD Load Procedures  
-!source sql/02_scd_load_procedure.sql
+!source sql/02_scd_load.sql
 
 -- Step 3: Semantic Layer
 !source sql/03_semantic_layer.sql

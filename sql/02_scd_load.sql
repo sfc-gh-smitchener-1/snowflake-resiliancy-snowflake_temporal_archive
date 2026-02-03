@@ -1,10 +1,10 @@
 /*
 ================================================================================
-SNOWFLAKE TEMPORAL ARCHIVE - SCD PROCEDURES
+SNOWFLAKE TEMPORAL ARCHIVE - SCD TYPE 2 LOAD
 ================================================================================
 
-Creates the SCD Type 2 load procedures.
-Run this script in a Snowflake Worksheet after 02a_scd_tables.sql.
+Creates the TABLE_REGISTRY, SCD procedures, and scheduled Tasks.
+Run this script in a Snowflake Worksheet after 01_initial_setup.sql.
 
 Reference: https://docs.snowflake.com/en/user-guide/backups
 ================================================================================
@@ -14,6 +14,60 @@ USE ROLE DATA_ADMIN;
 USE DATABASE TEMPORAL_ARCHIVE;
 USE SCHEMA ARCHIVE;
 USE WAREHOUSE TEMPORAL_ARCHIVE_WH;
+
+-- =============================================================================
+-- TABLE REGISTRY: Defines all source-to-target mappings
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE.TABLE_REGISTRY (
+    REGISTRY_ID             NUMBER AUTOINCREMENT,
+    SOURCE_DATABASE         VARCHAR(256) NOT NULL,
+    SOURCE_SCHEMA           VARCHAR(256) NOT NULL,
+    SOURCE_VIEW             VARCHAR(256) NOT NULL,
+    TARGET_DATABASE         VARCHAR(256) NOT NULL,
+    TARGET_SCHEMA           VARCHAR(256) NOT NULL,
+    TARGET_TABLE            VARCHAR(256) NOT NULL,
+    PRIMARY_KEY_COLUMNS     VARCHAR(4096) NOT NULL,
+    IS_ACTIVE               BOOLEAN DEFAULT TRUE,
+    CREATED_AT              TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    UPDATED_AT              TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    "_LOADED_AT"            TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    "_SOURCE_SYSTEM"        VARCHAR(100) DEFAULT 'TEMPORAL_ARCHIVE',
+    "_SOURCE_TABLE"         VARCHAR(100) DEFAULT 'TABLE_REGISTRY',
+    "_ROW_HASH"             VARCHAR(64),
+    "_IS_CURRENT"           BOOLEAN DEFAULT TRUE,
+    "_VALID_FROM"           TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    "_VALID_TO"             VARCHAR(50) DEFAULT '9999-12-31 23:59:59'
+)
+COMMENT = 'Registry of tables to archive via SCD Type 2. Ref: https://docs.snowflake.com/en/user-guide/backups';
+
+
+-- =============================================================================
+-- POPULATE TABLE REGISTRY
+-- =============================================================================
+
+MERGE INTO TEMPORAL_ARCHIVE.ARCHIVE.TABLE_REGISTRY AS target
+USING (
+    SELECT * FROM (VALUES
+        ('SNOWFLAKE', 'ACCOUNT_USAGE', 'QUERY_HISTORY', 'TEMPORAL_ARCHIVE', 'ACCOUNT_USAGE', 'QUERY_HISTORY_ARCHIVE', 'QUERY_ID'),
+        ('SNOWFLAKE', 'ACCOUNT_USAGE', 'WAREHOUSE_METERING_HISTORY', 'TEMPORAL_ARCHIVE', 'ACCOUNT_USAGE', 'WAREHOUSE_METERING_HISTORY_ARCHIVE', 'START_TIME,WAREHOUSE_ID'),
+        ('SNOWFLAKE', 'ACCOUNT_USAGE', 'STORAGE_USAGE', 'TEMPORAL_ARCHIVE', 'ACCOUNT_USAGE', 'STORAGE_USAGE_ARCHIVE', 'USAGE_DATE'),
+        ('SNOWFLAKE', 'ACCOUNT_USAGE', 'LOGIN_HISTORY', 'TEMPORAL_ARCHIVE', 'ACCOUNT_USAGE', 'LOGIN_HISTORY_ARCHIVE', 'EVENT_ID'),
+        ('SNOWFLAKE', 'ACCOUNT_USAGE', 'USERS', 'TEMPORAL_ARCHIVE', 'ACCOUNT_USAGE', 'USERS_ARCHIVE', 'USER_ID'),
+        ('SNOWFLAKE', 'ACCOUNT_USAGE', 'ROLES', 'TEMPORAL_ARCHIVE', 'ACCOUNT_USAGE', 'ROLES_ARCHIVE', 'ROLE_ID'),
+        ('SNOWFLAKE', 'ACCOUNT_USAGE', 'DATABASES', 'TEMPORAL_ARCHIVE', 'ACCOUNT_USAGE', 'DATABASES_ARCHIVE', 'DATABASE_ID'),
+        ('SNOWFLAKE', 'ACCOUNT_USAGE', 'TABLES', 'TEMPORAL_ARCHIVE', 'ACCOUNT_USAGE', 'TABLES_ARCHIVE', 'TABLE_ID'),
+        ('SNOWFLAKE', 'ORGANIZATION_USAGE', 'USAGE_IN_CURRENCY_DAILY', 'TEMPORAL_ARCHIVE', 'ORGANIZATION_USAGE', 'USAGE_IN_CURRENCY_DAILY_ARCHIVE', 'USAGE_DATE,ACCOUNT_LOCATOR,USAGE_TYPE'),
+        ('SNOWFLAKE', 'ORGANIZATION_USAGE', 'CONTRACT_ITEMS', 'TEMPORAL_ARCHIVE', 'ORGANIZATION_USAGE', 'CONTRACT_ITEMS_ARCHIVE', 'CONTRACT_NUMBER,CONTRACT_ITEM_NUMBER')
+    ) AS t(SOURCE_DATABASE, SOURCE_SCHEMA, SOURCE_VIEW, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, PRIMARY_KEY_COLUMNS)
+) AS source
+ON target.SOURCE_DATABASE = source.SOURCE_DATABASE
+   AND target.SOURCE_SCHEMA = source.SOURCE_SCHEMA
+   AND target.SOURCE_VIEW = source.SOURCE_VIEW
+WHEN NOT MATCHED THEN
+    INSERT (SOURCE_DATABASE, SOURCE_SCHEMA, SOURCE_VIEW, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, PRIMARY_KEY_COLUMNS)
+    VALUES (source.SOURCE_DATABASE, source.SOURCE_SCHEMA, source.SOURCE_VIEW, source.TARGET_DATABASE, source.TARGET_SCHEMA, source.TARGET_TABLE, source.PRIMARY_KEY_COLUMNS);
+
 
 -- =============================================================================
 -- PROCEDURE 1: GET_SOURCE_COLUMNS
@@ -216,7 +270,7 @@ END;
 $$;
 
 -- =============================================================================
--- PROCEDURE 4: RUN_SCD_LOAD (Main procedure)
+-- PROCEDURE 4: RUN_SCD_LOAD (Main procedure - called by Tasks and Streamlit)
 -- =============================================================================
 
 CREATE OR REPLACE PROCEDURE TEMPORAL_ARCHIVE.ARCHIVE.RUN_SCD_LOAD()
@@ -299,7 +353,31 @@ END;
 $$;
 
 -- =============================================================================
+-- SNOWFLAKE TASKS: Schedule SCD loads twice daily
+-- =============================================================================
+
+CREATE OR REPLACE TASK TEMPORAL_ARCHIVE.ARCHIVE.TASK_SCD_LOAD_MORNING
+    WAREHOUSE = TEMPORAL_ARCHIVE_WH
+    SCHEDULE = 'USING CRON 0 6 * * * America/New_York'
+    COMMENT = 'Morning SCD load at 6 AM.'
+AS
+    CALL TEMPORAL_ARCHIVE.ARCHIVE.RUN_SCD_LOAD();
+
+CREATE OR REPLACE TASK TEMPORAL_ARCHIVE.ARCHIVE.TASK_SCD_LOAD_EVENING
+    WAREHOUSE = TEMPORAL_ARCHIVE_WH
+    SCHEDULE = 'USING CRON 0 18 * * * America/New_York'
+    COMMENT = 'Evening SCD load at 6 PM.'
+AS
+    CALL TEMPORAL_ARCHIVE.ARCHIVE.RUN_SCD_LOAD();
+
+ALTER TASK TEMPORAL_ARCHIVE.ARCHIVE.TASK_SCD_LOAD_MORNING RESUME;
+
+ALTER TASK TEMPORAL_ARCHIVE.ARCHIVE.TASK_SCD_LOAD_EVENING RESUME;
+
+-- =============================================================================
 -- VERIFICATION
 -- =============================================================================
 
-SELECT 'SCD procedures created. Next: Run 02c_scd_tasks.sql' AS STATUS;
+SHOW TASKS IN SCHEMA TEMPORAL_ARCHIVE.ARCHIVE;
+
+SELECT 'SCD load setup complete. Next: Run 03_semantic_layer.sql' AS STATUS;

@@ -449,6 +449,75 @@ ORDER BY month DESC;
 
 ---
 
+## Streamlit Application
+
+The Temporal Archive includes a **native Snowflake Streamlit application** for interactive exploration and operations.
+
+### Application Pages
+
+| Page | Purpose | Key Features |
+|------|---------|--------------|
+| **Dashboard** | Overview of archive status | Table counts, row counts, last load time |
+| **Archive Explorer** | Browse historical data | Filter by table, date range, view SCD history |
+| **Cost Analytics** | Analyze spending patterns | Warehouse costs, storage trends, user attribution |
+| **Security Audit** | Review access patterns | Login history, failed attempts, role changes |
+| **Cortex Analyst** | Natural language queries | Ask questions about your data in plain English |
+| **Operations** | Run SCD loads on demand | Manual trigger, load history, task status |
+| **About** | Documentation and help | Architecture overview, reference links |
+
+### Operations Page (DATA_ADMIN)
+
+The **Operations** page provides a UI for administrative tasks:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                            ⚙️ OPERATIONS PAGE                                       │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                     │
+│   ┌───────────────────────────────────────────────────────────────────────────────┐ │
+│   │  🚀 RUN SCD LOAD ON DEMAND                                                    │ │
+│   │                                                                               │ │
+│   │  [🔄 Run SCD Load Now]                                                        │ │
+│   │                                                                               │ │
+│   │  Results:                                                                     │ │
+│   │  ┌─────────────┬─────────────┬─────────────┬─────────────┐                    │ │
+│   │  │ Tables: 10  │ Updated: 50 │ Inserted: 0 │ Errors: 0   │                    │ │
+│   │  └─────────────┴─────────────┴─────────────┴─────────────┘                    │ │
+│   └───────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                     │
+│   📜 RECENT LOAD HISTORY                                                            │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │ Timestamp            │ Status  │ Updated │ Inserted │ Duration              │   │
+│   │ 2026-01-28 06:00:05  │ SUCCESS │ 1,250   │ 45,000   │ 45s                   │   │
+│   │ 2026-01-27 18:00:03  │ SUCCESS │ 890     │ 12,500   │ 32s                   │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                     │
+│   📋 TABLE REGISTRY                                                                 │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐   │
+│   │ Source                          │ Target                     │ Active       │   │
+│   │ SNOWFLAKE.ACCOUNT_USAGE.USERS   │ USERS_ARCHIVE              │ ✓            │   │
+│   │ SNOWFLAKE.ACCOUNT_USAGE.ROLES   │ ROLES_ARCHIVE              │ ✓            │   │
+│   └─────────────────────────────────────────────────────────────────────────────┘   │
+│                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Launching the Application
+
+After deployment, access the Streamlit app:
+
+1. Navigate to **Snowsight** → **Projects** → **Streamlit**
+2. Find **TEMPORAL_ARCHIVE_APP** in the TEMPORAL_ARCHIVE.STREAMLIT schema
+3. Click to launch
+
+Or via SQL:
+```sql
+SHOW STREAMLITS IN SCHEMA TEMPORAL_ARCHIVE.STREAMLIT;
+-- Click the URL in the results
+```
+
+---
+
 ## Summary: The Value Proposition
 
 | Category | Without Temporal Archive | With Temporal Archive |
@@ -635,14 +704,14 @@ snowflake-temporal-archive/
 │
 ├── sql/
 │   ├── 00_deploy_all.sql                  # ★ MASTER: Deployment orchestrator
-│   ├── 01_initial_setup.sql               # Database, schemas, warehouse, backup policy
-│   ├── 02_scd_load_procedure.sql          # SCD Type 2 procedures + Tasks (6 AM, 6 PM)
+│   ├── 01_initial_setup.sql               # Database, schemas, warehouse, backup policy, roles
+│   ├── 02_scd_load.sql                    # SCD Type 2 procedures + Tasks (6 AM, 6 PM)
 │   ├── 03_semantic_layer.sql              # Semantic views for Cortex Analyst
 │   ├── 04_streamlit_ddl.sql               # Streamlit support objects (views, procedures)
 │   └── 05_streamlit_app.sql               # Streamlit application deployment
 │
 ├── src/
-│   └── app.py                             # Streamlit application (Cortex AI enabled)
+│   └── app.py                             # Streamlit application (Cortex AI + Operations)
 │
 └── docs/                                  # Documentation (optional)
 ```
@@ -677,7 +746,7 @@ USE ROLE ACCOUNTADMIN;
 USE ROLE DATA_ADMIN;
 
 -- Step 2: SCD load procedures and Tasks
-!source sql/02_scd_load_procedure.sql
+!source sql/02_scd_load.sql
 
 -- Step 3: Semantic layer for Cortex Analyst
 !source sql/03_semantic_layer.sql
@@ -808,6 +877,266 @@ CREATE TABLE TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE (
 - [ ] Cost trend analytics
 - [ ] Performance deep-dives
 - [ ] AI-assisted research tools
+
+---
+
+## Engineering Notes
+
+This section provides technical details for data engineers and software engineers who will be maintaining, extending, or troubleshooting this solution.
+
+### Stored Procedure Implementation
+
+The SCD load procedures use **Snowflake Scripting** (SQL-based stored procedures). Key implementation details:
+
+#### 1. Procedure Delimiters
+
+All procedures use `$$` (double-dollar) delimiters instead of single quotes. This allows natural use of single quotes within the procedure body without complex escaping:
+
+```sql
+CREATE OR REPLACE PROCEDURE MY_PROCEDURE()
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS
+$$
+DECLARE
+    my_var VARCHAR DEFAULT 'hello';   -- Single quotes work naturally
+BEGIN
+    RETURN my_var;
+END;
+$$;
+```
+
+#### 2. Variable Referencing in Dynamic SQL
+
+When building dynamic SQL strings that will be executed via `EXECUTE IMMEDIATE`, variables are concatenated directly (no colon prefix):
+
+```sql
+-- Inside a procedure body (within $$ delimiters)
+v_sql := 'SELECT * FROM ' || p_database || '.' || p_schema || '.' || p_table;
+EXECUTE IMMEDIATE v_sql;
+```
+
+When using `EXECUTE IMMEDIATE` with a variable reference, prefix with colon:
+
+```sql
+res := (EXECUTE IMMEDIATE :v_sql);
+```
+
+#### 3. Cursor Patterns for Dynamic Queries
+
+The procedures use `RESULTSET` + `CURSOR` pattern for iterating over dynamically constructed queries:
+
+```sql
+DECLARE
+    v_sql VARCHAR;
+    res RESULTSET;
+    cur CURSOR FOR res;
+BEGIN
+    v_sql := 'SELECT COLUMN_NAME FROM ' || db || '.INFORMATION_SCHEMA.COLUMNS WHERE ...';
+    res := (EXECUTE IMMEDIATE :v_sql);
+    OPEN cur;
+    
+    FOR rec IN cur DO
+        -- Process rec.COLUMN_NAME
+    END FOR;
+END;
+```
+
+This pattern is required because `IDENTIFIER()` with a variable doesn't work inside `FOR...IN (SELECT...)` cursor declarations.
+
+#### 4. EXECUTE AS CALLER
+
+All procedures use `EXECUTE AS CALLER` to inherit the caller's role and permissions. This ensures:
+- The DATA_ADMIN role's privileges are used when Tasks call the procedures
+- Users with appropriate grants can run procedures on-demand
+- No need to grant privileges directly to the procedure owner
+
+### SCD Type 2 Algorithm
+
+The `LOAD_TABLE_SCD` procedure implements a two-phase SCD Type 2 algorithm:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                           SCD TYPE 2 LOAD ALGORITHM                                 │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                     │
+│   PHASE 1: MERGE (Close Changed Records)                                            │
+│   ────────────────────────────────────────                                          │
+│   MERGE INTO target_table AS target                                                 │
+│   USING (                                                                           │
+│       SELECT *, SHA2(columns) AS _ROW_HASH_NEW                                      │
+│       FROM source_view                                                              │
+│   ) AS source                                                                       │
+│   ON target.PK = source.PK AND target._IS_CURRENT = TRUE                            │
+│   WHEN MATCHED AND target._ROW_HASH != source._ROW_HASH_NEW THEN                    │
+│       UPDATE SET                                                                    │
+│           _IS_CURRENT = FALSE,                                                      │
+│           _VALID_TO = CURRENT_TIMESTAMP()                                           │
+│                                                                                     │
+│   ─────────────────────────────────────────────────────────────────────────────     │
+│                                                                                     │
+│   PHASE 2: INSERT (Add New/Changed Records)                                         │
+│   ────────────────────────────────────────                                          │
+│   INSERT INTO target_table                                                          │
+│   SELECT                                                                            │
+│       source_columns,                                                               │
+│       CURRENT_TIMESTAMP() AS _LOADED_AT,                                            │
+│       'SOURCE_SYSTEM' AS _SOURCE_SYSTEM,                                            │
+│       'SOURCE_TABLE' AS _SOURCE_TABLE,                                              │
+│       SHA2(columns) AS _ROW_HASH,                                                   │
+│       TRUE AS _IS_CURRENT,                                                          │
+│       CURRENT_TIMESTAMP() AS _VALID_FROM,                                           │
+│       '9999-12-31 23:59:59' AS _VALID_TO                                            │
+│   FROM source_view src                                                              │
+│   WHERE NOT EXISTS (                                                                │
+│       SELECT 1 FROM target_table tgt                                                │
+│       WHERE tgt.PK = src.PK                                                         │
+│         AND tgt._IS_CURRENT = TRUE                                                  │
+│         AND tgt._ROW_HASH = SHA2(src.columns)                                       │
+│   )                                                                                 │
+│                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why two phases?** The MERGE only updates changed records (closing them). The INSERT adds both:
+1. New records (never seen before)
+2. Changed records (new version of existing record)
+
+This avoids the complexity of `WHEN MATCHED THEN UPDATE` + `INSERT` in the same MERGE for different row types.
+
+### Hash-Based Change Detection
+
+The `GET_HASH_EXPRESSION` procedure dynamically builds a SHA-256 hash expression:
+
+```sql
+-- For columns: ID, NAME, STATUS
+-- Generates:
+SHA2(CONCAT_WS('|', 
+    COALESCE("ID"::VARCHAR, ''),
+    COALESCE("NAME"::VARCHAR, ''),
+    COALESCE("STATUS"::VARCHAR, '')
+), 256)
+```
+
+**Key design decisions:**
+- `COALESCE(..., '')` - NULL values become empty strings for consistent hashing
+- `CONCAT_WS('|', ...)` - Pipe delimiter prevents collision (e.g., 'AB' + 'C' vs 'A' + 'BC')
+- `::VARCHAR` cast - Ensures all types are comparable as strings
+- SHA-256 - Cryptographic hash with negligible collision probability
+
+### Table Registry Pattern
+
+The `TABLE_REGISTRY` table drives the entire SCD process:
+
+```sql
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│                              TABLE_REGISTRY SCHEMA                                       │
+├──────────────────────────────────────────────────────────────────────────────────────────┤
+│ REGISTRY_ID           │ Auto-increment primary key                                       │
+│ SOURCE_DATABASE       │ e.g., 'SNOWFLAKE'                                                │
+│ SOURCE_SCHEMA         │ e.g., 'ACCOUNT_USAGE'                                            │
+│ SOURCE_VIEW           │ e.g., 'QUERY_HISTORY'                                            │
+│ TARGET_DATABASE       │ e.g., 'TEMPORAL_ARCHIVE'                                         │
+│ TARGET_SCHEMA         │ e.g., 'ACCOUNT_USAGE'                                            │
+│ TARGET_TABLE          │ e.g., 'QUERY_HISTORY_ARCHIVE'                                    │
+│ PRIMARY_KEY_COLUMNS   │ Comma-separated PKs, e.g., 'QUERY_ID' or 'START_TIME,WAREHOUSE_ID'│
+│ IS_ACTIVE             │ Boolean flag to enable/disable specific tables                   │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**To add a new table:**
+```sql
+INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.TABLE_REGISTRY 
+    (SOURCE_DATABASE, SOURCE_SCHEMA, SOURCE_VIEW, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, PRIMARY_KEY_COLUMNS)
+VALUES 
+    ('SNOWFLAKE', 'ACCOUNT_USAGE', 'NEW_VIEW', 'TEMPORAL_ARCHIVE', 'ACCOUNT_USAGE', 'NEW_VIEW_ARCHIVE', 'PK_COLUMN');
+```
+
+The next SCD load will automatically:
+1. Dynamically discover source columns via `INFORMATION_SCHEMA`
+2. Create the target table if it doesn't exist (with SCD columns)
+3. Load data using SCD Type 2 logic
+
+### Streamlit Operations Page
+
+The Streamlit app includes an **Operations** page (`⚙️ Operations`) that allows DATA_ADMIN users to:
+
+1. **Run SCD Load On Demand** - Calls `TEMPORAL_ARCHIVE.ARCHIVE.RUN_SCD_LOAD()` directly
+2. **View Load History** - Shows results from the `LOAD_LOG` table
+3. **View Task History** - Shows scheduled task executions (last 7 days)
+4. **View Table Registry** - Shows all registered source-to-target mappings
+
+```python
+# How the button works (src/app.py)
+if st.button("Run SCD Load Now"):
+    result = session.sql("CALL TEMPORAL_ARCHIVE.ARCHIVE.RUN_SCD_LOAD()").collect()
+    # Display results: tables processed, rows updated, rows inserted, errors
+```
+
+### Error Handling
+
+The `LOAD_TABLE_SCD` procedure includes exception handling:
+
+```sql
+EXCEPTION
+    WHEN OTHER THEN
+        RETURN OBJECT_CONSTRUCT(
+            'source', source_fqn,
+            'target', target_fqn,
+            'status', 'error',
+            'error', SQLERRM,
+            'timestamp', CURRENT_TIMESTAMP()::VARCHAR
+        );
+```
+
+The parent `RUN_SCD_LOAD` procedure tracks error counts and returns a summary:
+
+```json
+{
+  "tables_processed": 10,
+  "total_updated": 150,
+  "total_inserted": 5000,
+  "error_count": 1,
+  "table_results": [...]
+}
+```
+
+### Performance Considerations
+
+1. **Warehouse Sizing** - The `TEMPORAL_ARCHIVE_WH` is set to XSMALL by default. Scale up for initial loads of large tables.
+
+2. **Clustering** - Consider adding clustering on `_VALID_FROM` or the primary key for large archive tables:
+   ```sql
+   ALTER TABLE QUERY_HISTORY_ARCHIVE CLUSTER BY (_VALID_FROM);
+   ```
+
+3. **Query Optimization** - Always filter on `_IS_CURRENT = TRUE` for point-in-time current state queries. Use `_VALID_FROM`/`_VALID_TO` for time-travel queries.
+
+4. **Concurrent Loads** - The current implementation processes tables sequentially. For parallel loads, consider splitting into multiple Tasks or using a task tree.
+
+### Extending the Solution
+
+**Adding a new source system (non-Snowflake):**
+
+1. Create a view in TEMPORAL_ARCHIVE that unions/transforms external data
+2. Register it in TABLE_REGISTRY pointing to your view
+3. The SCD procedures work with any source that's queryable from Snowflake
+
+**Custom hash logic:**
+
+Modify `GET_HASH_EXPRESSION` to exclude certain columns from change detection:
+
+```sql
+-- Example: Exclude timestamp columns from hash
+AND COLUMN_NAME NOT IN ('_LOADED_AT', ..., 'LAST_MODIFIED_TS')
+```
+
+**Different retention per table:**
+
+The current backup policy applies to the entire database. For table-level retention:
+- Create separate schemas with different backup policies
+- Or use Dynamic Tables with different refresh policies
 
 ---
 
