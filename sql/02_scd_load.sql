@@ -477,13 +477,8 @@ BEGIN
     ');
     
     OPEN cur;
-    <<fetch_loop>>
-    LOOP
-        FETCH cur INTO v_source_schema, v_source_view, v_pk_columns;
-        IF (SQLCODE != 0) THEN
-            LEAVE fetch_loop;
-        END IF;
-        
+    FETCH cur INTO v_source_schema, v_source_view, v_pk_columns;
+    WHILE (v_source_schema IS NOT NULL) DO
         -- Construct target table name
         v_target_table := v_source_view || '_ARCHIVE';
         
@@ -507,7 +502,11 @@ BEGIN
         ELSE
             error_count := error_count + 1;
         END IF;
-    END LOOP fetch_loop;
+        
+        -- Reset and fetch next
+        v_source_schema := NULL;
+        FETCH cur INTO v_source_schema, v_source_view, v_pk_columns;
+    END WHILE;
     CLOSE cur;
     
     -- ==========================================================================
