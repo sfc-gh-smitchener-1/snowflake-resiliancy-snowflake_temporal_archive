@@ -476,7 +476,7 @@ The **Operations** page provides a UI for administrative tasks:
 │                                                                                     │
 │   📅 TASK SCHEDULE STATUS                                                           │
 │   ┌───────────────────┬───────────────────┬───────────────────┐                     │
-│   │ ⏰ Morning Task    │ 🌙 Evening Task    │ 📊 Last Load       │                     │
+│   │ ⏰ Morning Task    │ 🌙 Evening Task    │ 📊 Last Load    │                     │
 │   │ 6:00 AM ET Daily  │ 6:00 PM ET Daily  │ 2026-01-28 06:00  │                     │
 │   └───────────────────┴───────────────────┴───────────────────┘                     │
 │                                                                                     │
@@ -504,7 +504,7 @@ The **Operations** page provides a UI for administrative tasks:
 │   ─────────────────────────────────────────────────────────────────────────────     │
 │                                                                                     │
 │   🔑 PRIMARY KEY MAPPINGS                                                           │
-│   Views are dynamically discovered. Only views with a PK mapping are processed.    │
+│   Views are dynamically discovered. Only views with a PK mapping are processed.     │
 │   ┌─────────────────────────────────────────────────────────────────────────────┐   │
 │   │ Schema          │ View                    │ Primary Key       │ Active      │   │
 │   │ ACCOUNT_USAGE   │ QUERY_HISTORY           │ QUERY_ID          │ ✓           │   │

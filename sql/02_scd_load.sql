@@ -455,97 +455,90 @@ DECLARE
     v_source_schema VARCHAR;
     v_source_view VARCHAR;
     v_is_active BOOLEAN;
-    v_has_pk BOOLEAN;
+    -- Cursor variables for Phase 1
+    v_sql_phase1 VARCHAR;
+    res_phase1 RESULTSET;
+    cur_phase1 CURSOR FOR res_phase1;
+    -- Cursor variables for Phase 2
+    v_sql_phase2 VARCHAR;
+    res_phase2 RESULTSET;
+    cur_phase2 CURSOR FOR res_phase2;
 BEGIN
     start_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
     
     -- ==========================================================================
     -- PHASE 1: Process views that HAVE primary key mappings
-    -- Query from the PK mapping table directly (it already has what we need)
+    -- Use RESULTSET + CURSOR pattern for reliable column access
     -- ==========================================================================
     
-    FOR rec IN (
+    v_sql_phase1 := '
         SELECT 
-            pk.SOURCE_SCHEMA,
-            pk.SOURCE_VIEW,
-            pk.PRIMARY_KEY_COLUMNS,
-            pk.IS_ACTIVE
-        FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS pk
-        WHERE pk.SOURCE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
-          AND EXISTS (
-              SELECT 1 FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
-              WHERE v.TABLE_SCHEMA = pk.SOURCE_SCHEMA
-                AND v.TABLE_NAME = pk.SOURCE_VIEW
-          )
-        ORDER BY pk.SOURCE_SCHEMA, pk.SOURCE_VIEW
-    )
-    DO
+            SOURCE_SCHEMA,
+            SOURCE_VIEW,
+            PRIMARY_KEY_COLUMNS,
+            IS_ACTIVE
+        FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS
+        WHERE SOURCE_SCHEMA IN (''ACCOUNT_USAGE'', ''ORGANIZATION_USAGE'')
+          AND IS_ACTIVE = TRUE
+        ORDER BY SOURCE_SCHEMA, SOURCE_VIEW
+    ';
+    
+    res_phase1 := (EXECUTE IMMEDIATE :v_sql_phase1);
+    OPEN cur_phase1;
+    
+    FOR rec IN cur_phase1 DO
         v_source_schema := rec.SOURCE_SCHEMA;
         v_source_view := rec.SOURCE_VIEW;
         v_pk_columns := rec.PRIMARY_KEY_COLUMNS;
-        v_is_active := rec.IS_ACTIVE;
         
-        -- Skip inactive views
-        IF (v_is_active = FALSE) THEN
-            skipped_views := ARRAY_APPEND(skipped_views, OBJECT_CONSTRUCT(
-                'schema', v_source_schema,
-                'view', v_source_view,
-                'reason', 'Marked as inactive'
-            ));
-            views_skipped := views_skipped + 1;
+        -- Construct target table name
+        v_target_table := v_source_view || '_ARCHIVE';
+        
+        -- Call the SCD load procedure
+        CALL TEMPORAL_ARCHIVE.ARCHIVE.LOAD_TABLE_SCD(
+            'SNOWFLAKE',
+            v_source_schema,
+            v_source_view,
+            'TEMPORAL_ARCHIVE',
+            v_source_schema,
+            v_target_table,
+            v_pk_columns
+        ) INTO table_result;
+        
+        results := ARRAY_APPEND(results, table_result);
+        views_processed := views_processed + 1;
+        
+        IF (table_result:status = 'success') THEN
+            total_updated := total_updated + table_result:rows_updated::INTEGER;
+            total_inserted := total_inserted + table_result:rows_inserted::INTEGER;
         ELSE
-            -- Construct target table name
-            v_target_table := v_source_view || '_ARCHIVE';
-            
-            -- Call the SCD load procedure
-            CALL TEMPORAL_ARCHIVE.ARCHIVE.LOAD_TABLE_SCD(
-                'SNOWFLAKE',
-                v_source_schema,
-                v_source_view,
-                'TEMPORAL_ARCHIVE',
-                v_source_schema,
-                v_target_table,
-                v_pk_columns
-            ) INTO table_result;
-            
-            results := ARRAY_APPEND(results, table_result);
-            views_processed := views_processed + 1;
-            
-            IF (table_result:status = 'success') THEN
-                total_updated := total_updated + table_result:rows_updated::INTEGER;
-                total_inserted := total_inserted + table_result:rows_inserted::INTEGER;
-            ELSE
-                error_count := error_count + 1;
-            END IF;
+            error_count := error_count + 1;
         END IF;
     END FOR;
     
+    CLOSE cur_phase1;
+    
     -- ==========================================================================
-    -- PHASE 2: Log views that DON'T have primary key mappings
-    -- Query INFORMATION_SCHEMA but use TABLE_SCHEMA and TABLE_NAME directly
+    -- PHASE 2: Count unmapped views (don't iterate, just get count)
+    -- Avoids cursor issues with INFORMATION_SCHEMA
     -- ==========================================================================
     
-    FOR rec IN (
-        SELECT 
-            v.TABLE_SCHEMA,
-            v.TABLE_NAME
-        FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
-        WHERE v.TABLE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
-          AND NOT EXISTS (
-              SELECT 1 FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS pk
-              WHERE pk.SOURCE_SCHEMA = v.TABLE_SCHEMA
-                AND pk.SOURCE_VIEW = v.TABLE_NAME
-          )
-        ORDER BY v.TABLE_SCHEMA, v.TABLE_NAME
-    )
-    DO
+    SELECT COUNT(*) INTO views_skipped
+    FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
+    WHERE v.TABLE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
+      AND NOT EXISTS (
+          SELECT 1 FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS pk
+          WHERE pk.SOURCE_SCHEMA = v.TABLE_SCHEMA
+            AND pk.SOURCE_VIEW = v.TABLE_NAME
+      );
+    
+    -- Add a single summary entry for skipped views
+    IF (views_skipped > 0) THEN
         skipped_views := ARRAY_APPEND(skipped_views, OBJECT_CONSTRUCT(
-            'schema', rec.TABLE_SCHEMA,
-            'view', rec.TABLE_NAME,
-            'reason', 'No primary key mapping defined'
+            'message', views_skipped || ' views without primary key mapping',
+            'action', 'Add entries to TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS to include them'
         ));
-        views_skipped := views_skipped + 1;
-    END FOR;
+    END IF;
     
     end_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
     
