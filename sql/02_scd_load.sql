@@ -170,12 +170,21 @@ $$
 DECLARE
     column_list VARCHAR DEFAULT '';
     v_sql VARCHAR;
+    v_db VARCHAR;
+    v_schema VARCHAR;
+    v_view VARCHAR;
+    v_col_name VARCHAR;
     res RESULTSET;
     cur CURSOR FOR res;
 BEGIN
-    v_sql := 'SELECT COLUMN_NAME FROM ' || p_source_database || '.INFORMATION_SCHEMA.COLUMNS ' ||
-             'WHERE TABLE_SCHEMA = ''' || p_source_schema || ''' ' ||
-             'AND TABLE_NAME = ''' || p_source_view || ''' ' ||
+    -- Copy parameters to local variables
+    v_db := p_source_database;
+    v_schema := p_source_schema;
+    v_view := p_source_view;
+    
+    v_sql := 'SELECT COLUMN_NAME FROM ' || v_db || '.INFORMATION_SCHEMA.COLUMNS ' ||
+             'WHERE TABLE_SCHEMA = ''' || v_schema || ''' ' ||
+             'AND TABLE_NAME = ''' || v_view || ''' ' ||
              'AND COLUMN_NAME NOT IN (''_LOADED_AT'', ''_SOURCE_SYSTEM'', ''_SOURCE_TABLE'', ''_ROW_HASH'', ' ||
              '''_IS_CURRENT'', ''_VALID_FROM'', ''_VALID_TO'') ' ||
              'ORDER BY ORDINAL_POSITION';
@@ -183,12 +192,16 @@ BEGIN
     res := (EXECUTE IMMEDIATE :v_sql);
     OPEN cur;
     
-    FOR rec IN cur DO
+    FETCH cur INTO v_col_name;
+    WHILE (v_col_name IS NOT NULL) DO
         IF (column_list != '') THEN
             column_list := column_list || ', ';
         END IF;
-        column_list := column_list || '"' || rec.COLUMN_NAME || '"';
-    END FOR;
+        column_list := column_list || '"' || v_col_name || '"';
+        v_col_name := NULL;
+        FETCH cur INTO v_col_name;
+    END WHILE;
+    CLOSE cur;
     
     RETURN column_list;
 END;
@@ -247,38 +260,54 @@ EXECUTE AS CALLER
 AS
 $$
 DECLARE
+    v_src_db VARCHAR;
+    v_src_schema VARCHAR;
+    v_src_view VARCHAR;
+    v_tgt_db VARCHAR;
+    v_tgt_schema VARCHAR;
+    v_tgt_table VARCHAR;
     target_fqn VARCHAR;
     source_fqn VARCHAR;
     create_sql VARCHAR;
-    table_exists INTEGER;
+    table_exists INTEGER DEFAULT 0;
     check_sql VARCHAR;
+    v_count INTEGER;
     res RESULTSET;
+    cur CURSOR FOR res;
 BEGIN
-    target_fqn := p_target_database || '.' || p_target_schema || '.' || p_target_table;
-    source_fqn := p_source_database || '.' || p_source_schema || '.' || p_source_view;
+    -- Copy parameters to local variables
+    v_src_db := p_source_database;
+    v_src_schema := p_source_schema;
+    v_src_view := p_source_view;
+    v_tgt_db := p_target_database;
+    v_tgt_schema := p_target_schema;
+    v_tgt_table := p_target_table;
+    
+    target_fqn := v_tgt_db || '.' || v_tgt_schema || '.' || v_tgt_table;
+    source_fqn := v_src_db || '.' || v_src_schema || '.' || v_src_view;
     
     -- Check if table exists
-    check_sql := 'SELECT COUNT(*) FROM ' || p_target_database || '.INFORMATION_SCHEMA.TABLES ' ||
-                 'WHERE TABLE_SCHEMA = ''' || p_target_schema || ''' ' ||
-                 'AND TABLE_NAME = ''' || p_target_table || '''';
+    check_sql := 'SELECT COUNT(*) AS CNT FROM ' || v_tgt_db || '.INFORMATION_SCHEMA.TABLES ' ||
+                 'WHERE TABLE_SCHEMA = ''' || v_tgt_schema || ''' ' ||
+                 'AND TABLE_NAME = ''' || v_tgt_table || '''';
     
     res := (EXECUTE IMMEDIATE :check_sql);
-    
-    FOR rec IN res DO
-        table_exists := rec."COUNT(*)";
-    END FOR;
+    OPEN cur;
+    FETCH cur INTO v_count;
+    CLOSE cur;
+    table_exists := v_count;
     
     IF (table_exists = 0) THEN
         -- Create schema if not exists
-        EXECUTE IMMEDIATE 'CREATE SCHEMA IF NOT EXISTS ' || p_target_database || '.' || p_target_schema;
+        EXECUTE IMMEDIATE 'CREATE SCHEMA IF NOT EXISTS ' || v_tgt_db || '.' || v_tgt_schema;
         
         -- Create table from source with SCD columns
         create_sql := 'CREATE TABLE ' || target_fqn || ' AS 
             SELECT 
                 src.*,
                 CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_LOADED_AT",
-                ''' || p_source_database || '_' || p_source_schema || ''' AS "_SOURCE_SYSTEM",
-                ''' || p_source_view || ''' AS "_SOURCE_TABLE",
+                ''' || v_src_db || '_' || v_src_schema || ''' AS "_SOURCE_SYSTEM",
+                ''' || v_src_view || ''' AS "_SOURCE_TABLE",
                 '''' AS "_ROW_HASH",
                 TRUE AS "_IS_CURRENT",
                 CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_VALID_FROM",
@@ -313,6 +342,15 @@ EXECUTE AS CALLER
 AS
 $$
 DECLARE
+    -- Local copies of parameters
+    v_src_db VARCHAR;
+    v_src_schema VARCHAR;
+    v_src_view VARCHAR;
+    v_tgt_db VARCHAR;
+    v_tgt_schema VARCHAR;
+    v_tgt_table VARCHAR;
+    v_pk_cols VARCHAR;
+    -- Working variables
     source_fqn VARCHAR;
     target_fqn VARCHAR;
     source_columns VARCHAR;
@@ -328,21 +366,30 @@ DECLARE
     pk VARCHAR;
     table_status VARCHAR;
 BEGIN
-    source_fqn := p_source_database || '.' || p_source_schema || '.' || p_source_view;
-    target_fqn := p_target_database || '.' || p_target_schema || '.' || p_target_table;
+    -- Copy parameters to local variables
+    v_src_db := p_source_database;
+    v_src_schema := p_source_schema;
+    v_src_view := p_source_view;
+    v_tgt_db := p_target_database;
+    v_tgt_schema := p_target_schema;
+    v_tgt_table := p_target_table;
+    v_pk_cols := p_primary_key_columns;
+    
+    source_fqn := v_src_db || '.' || v_src_schema || '.' || v_src_view;
+    target_fqn := v_tgt_db || '.' || v_tgt_schema || '.' || v_tgt_table;
     
     -- Create target table if not exists
     CALL TEMPORAL_ARCHIVE.ARCHIVE.CREATE_TARGET_TABLE(
-        p_source_database, p_source_schema, p_source_view,
-        p_target_database, p_target_schema, p_target_table
+        :v_src_db, :v_src_schema, :v_src_view,
+        :v_tgt_db, :v_tgt_schema, :v_tgt_table
     ) INTO table_status;
     
-    CALL TEMPORAL_ARCHIVE.ARCHIVE.GET_SOURCE_COLUMNS(p_source_database, p_source_schema, p_source_view)
+    CALL TEMPORAL_ARCHIVE.ARCHIVE.GET_SOURCE_COLUMNS(:v_src_db, :v_src_schema, :v_src_view)
         INTO source_columns;
     
     CALL TEMPORAL_ARCHIVE.ARCHIVE.GET_HASH_EXPRESSION(source_columns) INTO hash_expr;
     
-    pk_columns := SPLIT(REPLACE(p_primary_key_columns, ' ', ''), ',');
+    pk_columns := SPLIT(REPLACE(v_pk_cols, ' ', ''), ',');
     
     FOR i IN 0 TO ARRAY_SIZE(pk_columns) - 1 DO
         pk := pk_columns[i]::VARCHAR;
@@ -387,8 +434,8 @@ BEGIN
         SELECT 
             ' || source_columns || ',
             CURRENT_TIMESTAMP()::TIMESTAMP_NTZ,
-            ''' || p_source_database || '_' || p_source_schema || ''',
-            ''' || p_source_view || ''',
+            ''' || v_src_db || '_' || v_src_schema || ''',
+            ''' || v_src_view || ''',
             ' || hash_expr || ',
             TRUE,
             CURRENT_TIMESTAMP()::TIMESTAMP_NTZ,
