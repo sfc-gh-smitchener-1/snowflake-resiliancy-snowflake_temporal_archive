@@ -531,6 +531,10 @@ BEGIN
     end_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
     
     -- Log the run
+    LET v_duration INTEGER := TIMESTAMPDIFF('SECOND', start_time, end_time);
+    LET v_status VARCHAR := CASE WHEN error_count = 0 THEN 'SUCCESS' ELSE 'PARTIAL_FAILURE' END;
+    LET v_hash VARCHAR := SHA2('DYNAMIC' || views_processed || total_updated || total_inserted, 256);
+    
     INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG (
         SOURCE_TABLE, TARGET_TABLE, ROWS_UPDATED, ROWS_INSERTED, 
         STATUS, DURATION_SECONDS, "_ROW_HASH"
@@ -540,9 +544,9 @@ BEGIN
         'ALL_TABLES',
         :total_updated,
         :total_inserted,
-        CASE WHEN :error_count = 0 THEN 'SUCCESS' ELSE 'PARTIAL_FAILURE' END,
-        TIMESTAMPDIFF('SECOND', :start_time, :end_time),
-        SHA2('DYNAMIC' || :views_processed || :total_updated || :total_inserted, 256)
+        :v_status,
+        :v_duration,
+        :v_hash
     );
     
     RETURN OBJECT_CONSTRUCT(
