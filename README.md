@@ -1075,7 +1075,7 @@ The `VIEW_PRIMARY_KEYS` table maps source views to their primary key columns:
 ├──────────────────────────────────────────────────────────────────────────────────────────┤
 │ SOURCE_SCHEMA         │ e.g., 'ACCOUNT_USAGE' or 'ORGANIZATION_USAGE'                    │
 │ SOURCE_VIEW           │ e.g., 'QUERY_HISTORY'                                            │
-│ PRIMARY_KEY_COLUMNS   │ Comma-separated PKs, e.g., 'QUERY_ID' or 'START_TIME,WAREHOUSE_ID'│
+│ PRIMARY_KEY_COLUMNS   │ Comma-separated PKs, e.g.,'QUERY_ID' or 'START_TIME,WAREHOUSE_ID'│
 │ IS_ACTIVE             │ Boolean flag to enable/disable specific views                    │
 └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```

@@ -455,26 +455,22 @@ DECLARE
     v_target_table VARCHAR;
     v_pk_columns VARCHAR;
     v_count INTEGER;
-    res RESULTSET;
-    cur CURSOR FOR res;
-BEGIN
-    start_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
-    
-    -- ==========================================================================
-    -- PHASE 1: Process views that HAVE primary key mappings
-    -- Use RESULTSET pattern for dynamic query execution
-    -- ==========================================================================
-    
-    res := (EXECUTE IMMEDIATE '
+    -- Static cursor definition
+    cur CURSOR FOR 
         SELECT 
             SOURCE_SCHEMA,
             SOURCE_VIEW,
             PRIMARY_KEY_COLUMNS
         FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS
-        WHERE SOURCE_SCHEMA IN (''ACCOUNT_USAGE'', ''ORGANIZATION_USAGE'')
+        WHERE SOURCE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
           AND IS_ACTIVE = TRUE
-        ORDER BY SOURCE_SCHEMA, SOURCE_VIEW
-    ');
+        ORDER BY SOURCE_SCHEMA, SOURCE_VIEW;
+BEGIN
+    start_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
+    
+    -- ==========================================================================
+    -- PHASE 1: Process views that HAVE primary key mappings
+    -- ==========================================================================
     
     OPEN cur;
     FETCH cur INTO v_source_schema, v_source_view, v_pk_columns;
@@ -510,23 +506,18 @@ BEGIN
     CLOSE cur;
     
     -- ==========================================================================
-    -- PHASE 2: Count unmapped views
+    -- PHASE 2: Count unmapped views using simple scalar query
     -- ==========================================================================
     
-    res := (EXECUTE IMMEDIATE '
-        SELECT COUNT(*) 
-        FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
-        WHERE v.TABLE_SCHEMA IN (''ACCOUNT_USAGE'', ''ORGANIZATION_USAGE'')
-          AND NOT EXISTS (
-              SELECT 1 FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS pk
-              WHERE pk.SOURCE_SCHEMA = v.TABLE_SCHEMA
-                AND pk.SOURCE_VIEW = v.TABLE_NAME
-          )
-    ');
+    SELECT COUNT(*) INTO :v_count
+    FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS v
+    WHERE v.TABLE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
+      AND NOT EXISTS (
+          SELECT 1 FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS pk
+          WHERE pk.SOURCE_SCHEMA = v.TABLE_SCHEMA
+            AND pk.SOURCE_VIEW = v.TABLE_NAME
+      );
     
-    OPEN cur;
-    FETCH cur INTO v_count;
-    CLOSE cur;
     views_skipped := v_count;
     
     -- Add a single summary entry for skipped views
