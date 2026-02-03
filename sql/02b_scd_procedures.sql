@@ -26,26 +26,31 @@ CREATE OR REPLACE PROCEDURE TEMPORAL_ARCHIVE.ARCHIVE.GET_SOURCE_COLUMNS(
 )
 RETURNS VARCHAR
 LANGUAGE SQL
-COMMENT = 'Returns comma-separated list of source columns.'
+EXECUTE AS CALLER
 AS
 $$
 DECLARE
     column_list VARCHAR DEFAULT '';
-    col_cursor CURSOR FOR
+    v_info_schema VARCHAR;
+BEGIN
+    v_info_schema := p_source_database || '.INFORMATION_SCHEMA.COLUMNS';
+    
+    FOR col IN (
         SELECT COLUMN_NAME 
-        FROM IDENTIFIER(:p_source_database || '.INFORMATION_SCHEMA.COLUMNS')
-        WHERE TABLE_SCHEMA = :p_source_schema
-          AND TABLE_NAME = :p_source_view
+        FROM IDENTIFIER(v_info_schema)
+        WHERE TABLE_SCHEMA = p_source_schema
+          AND TABLE_NAME = p_source_view
           AND COLUMN_NAME NOT IN ('_LOADED_AT', '_SOURCE_SYSTEM', '_SOURCE_TABLE', '_ROW_HASH', 
                                   '_IS_CURRENT', '_VALID_FROM', '_VALID_TO')
-        ORDER BY ORDINAL_POSITION;
-BEGIN
-    FOR col IN col_cursor DO
+        ORDER BY ORDINAL_POSITION
+    )
+    DO
         IF (column_list != '') THEN
             column_list := column_list || ', ';
         END IF;
         column_list := column_list || '"' || col.COLUMN_NAME || '"';
     END FOR;
+    
     RETURN column_list;
 END;
 $$;
@@ -59,7 +64,7 @@ CREATE OR REPLACE PROCEDURE TEMPORAL_ARCHIVE.ARCHIVE.GET_HASH_EXPRESSION(
 )
 RETURNS VARCHAR
 LANGUAGE SQL
-COMMENT = 'Builds SHA2 hash expression for SCD change detection.'
+EXECUTE AS CALLER
 AS
 $$
 DECLARE
@@ -69,7 +74,7 @@ DECLARE
     col VARCHAR;
     i INTEGER;
 BEGIN
-    columns := SPLIT(REPLACE(REPLACE(:p_column_list, '"', ''), ' ', ''), ',');
+    columns := SPLIT(REPLACE(REPLACE(p_column_list, '"', ''), ' ', ''), ',');
     
     FOR i IN 0 TO ARRAY_SIZE(columns) - 1 DO
         col := columns[i]::VARCHAR;
@@ -99,7 +104,7 @@ CREATE OR REPLACE PROCEDURE TEMPORAL_ARCHIVE.ARCHIVE.LOAD_TABLE_SCD(
 )
 RETURNS VARIANT
 LANGUAGE SQL
-COMMENT = 'Loads single table using SCD Type 2 pattern.'
+EXECUTE AS CALLER
 AS
 $$
 DECLARE
@@ -117,15 +122,15 @@ DECLARE
     i INTEGER;
     pk VARCHAR;
 BEGIN
-    source_fqn := :p_source_database || '.' || :p_source_schema || '.' || :p_source_view;
-    target_fqn := :p_target_database || '.' || :p_target_schema || '.' || :p_target_table;
+    source_fqn := p_source_database || '.' || p_source_schema || '.' || p_source_view;
+    target_fqn := p_target_database || '.' || p_target_schema || '.' || p_target_table;
     
-    CALL TEMPORAL_ARCHIVE.ARCHIVE.GET_SOURCE_COLUMNS(:p_source_database, :p_source_schema, :p_source_view)
+    CALL TEMPORAL_ARCHIVE.ARCHIVE.GET_SOURCE_COLUMNS(p_source_database, p_source_schema, p_source_view)
         INTO source_columns;
     
     CALL TEMPORAL_ARCHIVE.ARCHIVE.GET_HASH_EXPRESSION(source_columns) INTO hash_expr;
     
-    pk_columns := SPLIT(REPLACE(:p_primary_key_columns, ' ', ''), ',');
+    pk_columns := SPLIT(REPLACE(p_primary_key_columns, ' ', ''), ',');
     
     FOR i IN 0 TO ARRAY_SIZE(pk_columns) - 1 DO
         pk := pk_columns[i]::VARCHAR;
@@ -170,8 +175,8 @@ BEGIN
         SELECT 
             ' || source_columns || ',
             CURRENT_TIMESTAMP()::TIMESTAMP_NTZ,
-            ''' || :p_source_database || '_' || :p_source_schema || ''',
-            ''' || :p_source_view || ''',
+            ''' || p_source_database || '_' || p_source_schema || ''',
+            ''' || p_source_view || ''',
             ' || hash_expr || ',
             TRUE,
             CURRENT_TIMESTAMP()::TIMESTAMP_NTZ,
@@ -216,7 +221,7 @@ $$;
 CREATE OR REPLACE PROCEDURE TEMPORAL_ARCHIVE.ARCHIVE.RUN_SCD_LOAD()
 RETURNS VARIANT
 LANGUAGE SQL
-COMMENT = 'Main SCD load procedure - runs twice daily via Task.'
+EXECUTE AS CALLER
 AS
 $$
 DECLARE
@@ -227,8 +232,10 @@ DECLARE
     total_updated INTEGER DEFAULT 0;
     total_inserted INTEGER DEFAULT 0;
     error_count INTEGER DEFAULT 0;
+BEGIN
+    start_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
     
-    table_cursor CURSOR FOR
+    FOR rec IN (
         SELECT 
             SOURCE_DATABASE,
             SOURCE_SCHEMA,
@@ -238,11 +245,9 @@ DECLARE
             TARGET_TABLE,
             PRIMARY_KEY_COLUMNS
         FROM TEMPORAL_ARCHIVE.ARCHIVE.TABLE_REGISTRY
-        WHERE IS_ACTIVE = TRUE;
-BEGIN
-    start_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
-    
-    FOR rec IN table_cursor DO
+        WHERE IS_ACTIVE = TRUE
+    )
+    DO
         CALL TEMPORAL_ARCHIVE.ARCHIVE.LOAD_TABLE_SCD(
             rec.SOURCE_DATABASE,
             rec.SOURCE_SCHEMA,
