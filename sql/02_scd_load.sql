@@ -454,39 +454,25 @@ DECLARE
     v_pk_columns VARCHAR;
     v_source_schema VARCHAR;
     v_source_view VARCHAR;
-    v_is_active BOOLEAN;
-    -- Cursor variables for Phase 1
-    v_sql_phase1 VARCHAR;
-    res_phase1 RESULTSET;
-    cur_phase1 CURSOR FOR res_phase1;
-    -- Cursor variables for Phase 2
-    v_sql_phase2 VARCHAR;
-    res_phase2 RESULTSET;
-    cur_phase2 CURSOR FOR res_phase2;
+    -- Cursor for iterating through PK mappings
+    c_views CURSOR FOR 
+        SELECT 
+            SOURCE_SCHEMA,
+            SOURCE_VIEW,
+            PRIMARY_KEY_COLUMNS
+        FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS
+        WHERE SOURCE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE')
+          AND IS_ACTIVE = TRUE
+        ORDER BY SOURCE_SCHEMA, SOURCE_VIEW;
 BEGIN
     start_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
     
     -- ==========================================================================
     -- PHASE 1: Process views that HAVE primary key mappings
-    -- Use RESULTSET + CURSOR pattern for reliable column access
     -- ==========================================================================
     
-    v_sql_phase1 := '
-        SELECT 
-            SOURCE_SCHEMA,
-            SOURCE_VIEW,
-            PRIMARY_KEY_COLUMNS,
-            IS_ACTIVE
-        FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_PRIMARY_KEYS
-        WHERE SOURCE_SCHEMA IN (''ACCOUNT_USAGE'', ''ORGANIZATION_USAGE'')
-          AND IS_ACTIVE = TRUE
-        ORDER BY SOURCE_SCHEMA, SOURCE_VIEW
-    ';
-    
-    res_phase1 := (EXECUTE IMMEDIATE :v_sql_phase1);
-    OPEN cur_phase1;
-    
-    FOR rec IN cur_phase1 DO
+    OPEN c_views;
+    FOR rec IN c_views DO
         v_source_schema := rec.SOURCE_SCHEMA;
         v_source_view := rec.SOURCE_VIEW;
         v_pk_columns := rec.PRIMARY_KEY_COLUMNS;
@@ -515,12 +501,10 @@ BEGIN
             error_count := error_count + 1;
         END IF;
     END FOR;
-    
-    CLOSE cur_phase1;
+    CLOSE c_views;
     
     -- ==========================================================================
     -- PHASE 2: Count unmapped views (don't iterate, just get count)
-    -- Avoids cursor issues with INFORMATION_SCHEMA
     -- ==========================================================================
     
     SELECT COUNT(*) INTO views_skipped
