@@ -117,11 +117,23 @@ def get_archive_inventory():
 
 @st.cache_data(ttl=60)
 def get_semantic_views():
-    """Get available semantic views"""
+    """Get available archive tables for Cortex queries"""
     session = get_session()
     try:
+        # Get archive tables directly instead of relying on semantic config
         df = session.sql("""
-            SELECT * FROM TEMPORAL_ARCHIVE.STREAMLIT.VW_SEMANTIC_VIEWS
+            SELECT 
+                TABLE_SCHEMA AS SOURCE_SCHEMA,
+                TABLE_NAME AS VIEW_NAME,
+                'ARCHIVE' AS VIEW_TYPE,
+                'Archive table: ' || TABLE_NAME AS DESCRIPTION,
+                TRUE AS IS_ACTIVE,
+                CREATED AS CREATED_AT
+            FROM TEMPORAL_ARCHIVE.INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_NAME LIKE '%_ARCHIVE'
+              AND TABLE_TYPE = 'BASE TABLE'
+            ORDER BY TABLE_SCHEMA, TABLE_NAME
+            LIMIT 50
         """).to_pandas()
         return df
     except:
@@ -165,37 +177,21 @@ def execute_sql(sql: str):
 # CORTEX INTEGRATION
 # ============================================================================
 
-def call_cortex_complete(prompt: str, semantic_view: str):
+def call_cortex_complete(prompt: str, table_name: str, schema_name: str):
     """Use Cortex COMPLETE to generate SQL from natural language"""
     session = get_session()
     
     try:
-        # Get underlying table info for the semantic view
-        config = session.sql(f"""
-            SELECT VIEW_SQL 
-            FROM TEMPORAL_ARCHIVE.SEMANTIC.SEMANTIC_CONFIG 
-            WHERE VIEW_NAME = '{semantic_view}'
-              AND IS_ACTIVE = TRUE
-        """).to_pandas()
+        # Build the full table name
+        primary_table = f"TEMPORAL_ARCHIVE.{schema_name}.{table_name}"
         
-        if config.empty:
-            return None, "Semantic view not found"
-        
-        view_sql = config['VIEW_SQL'].iloc[0]
-        
-        # Extract table reference
-        import re
-        table_match = re.search(r'AS\s+(TEMPORAL_ARCHIVE\.\w+\.\w+)', view_sql)
-        
-        if not table_match:
-            return None, "Could not find underlying table"
-        
-        primary_table = table_match.group(1)
-        
-        # Get column info
-        sample_df = session.sql(f"SELECT * FROM {primary_table} LIMIT 1").to_pandas()
-        columns = list(sample_df.columns)
-        columns_str = ', '.join(columns[:30])
+        # Get column info from the archive table
+        try:
+            sample_df = session.sql(f"SELECT * FROM {primary_table} LIMIT 1").to_pandas()
+            columns = list(sample_df.columns)
+            columns_str = ', '.join(columns[:30])
+        except Exception as e:
+            return None, f"Could not access table {primary_table}: {str(e)}"
         
         # Build prompt for Cortex
         escaped_prompt = prompt.replace("'", "''")
@@ -570,49 +566,79 @@ def render_cortex_page():
     </div>
     """, unsafe_allow_html=True)
     
-    # Get semantic views
-    sem_views = get_semantic_views()
+    # Get archive tables
+    archive_tables = get_semantic_views()
     
-    if not sem_views.empty:
-        # View selector
-        view_options = sem_views['VIEW_NAME'].tolist()
-        selected_view = st.selectbox("Select Analysis Type", view_options)
+    if not archive_tables.empty:
+        # Schema filter
+        schemas = archive_tables['SOURCE_SCHEMA'].unique().tolist()
+        selected_schema = st.selectbox("Select Schema", schemas)
         
-        # Show view description
-        view_info = sem_views[sem_views['VIEW_NAME'] == selected_view].iloc[0]
-        st.caption(view_info['DESCRIPTION'])
+        # Filter tables by schema
+        schema_tables = archive_tables[archive_tables['SOURCE_SCHEMA'] == selected_schema]
+        table_options = schema_tables['VIEW_NAME'].tolist()
+        
+        selected_table = st.selectbox("Select Archive Table", table_options)
+        
+        # Show table description
+        st.caption(f"Query the {selected_table} table using natural language")
         
         st.divider()
         
-        # Sample questions
+        # Sample questions based on selected table
         st.markdown("### 💡 Sample Questions")
-        sample_questions = [
-            "Show total credits by warehouse for the last year",
-            "Which users have the most failed login attempts?",
-            "What is the query count by type?",
-            "Show storage usage trend",
-            "List users who haven't logged in recently"
-        ]
+        
+        # Dynamic sample questions based on table name
+        if 'WAREHOUSE' in selected_table.upper():
+            sample_questions = [
+                "Show total credits by warehouse",
+                "Which warehouse uses the most credits?",
+                "Show credit usage trend by month"
+            ]
+        elif 'LOGIN' in selected_table.upper():
+            sample_questions = [
+                "Show failed login attempts by user",
+                "Which users have the most logins?",
+                "Show login count by day"
+            ]
+        elif 'QUERY' in selected_table.upper():
+            sample_questions = [
+                "Show query count by type",
+                "Which users run the most queries?",
+                "Show average query duration by warehouse"
+            ]
+        elif 'USER' in selected_table.upper():
+            sample_questions = [
+                "List all active users",
+                "Show users by default role",
+                "Which users have MFA enabled?"
+            ]
+        else:
+            sample_questions = [
+                "Show the first 10 records",
+                "Count total records",
+                "Show distinct values"
+            ]
         
         cols = st.columns(3)
         for i, q in enumerate(sample_questions[:3]):
             with cols[i]:
-                if st.button(f"💬 {q[:30]}...", key=f"sample_{i}"):
+                if st.button(f"💬 {q[:25]}...", key=f"sample_{i}"):
                     st.session_state.cortex_question = q
         
         st.divider()
         
         # Question input
         question = st.text_input(
-            "Ask a question",
+            "Ask a question about this table",
             value=st.session_state.get('cortex_question', ''),
-            placeholder="e.g., Show warehouse credit usage by month"
+            placeholder=f"e.g., {sample_questions[0]}"
         )
         
         if st.button("🚀 Ask Cortex", type="primary"):
             if question:
                 with st.spinner("Generating SQL with Cortex..."):
-                    result, error = call_cortex_complete(question, selected_view)
+                    result, error = call_cortex_complete(question, selected_table, selected_schema)
                     
                     if error:
                         st.error(error)
@@ -620,18 +646,23 @@ def render_cortex_page():
                         st.markdown("### Generated SQL")
                         st.code(result['sql'], language="sql")
                         
-                        if st.button("▶️ Execute Query"):
-                            with st.spinner("Running query..."):
-                                df, sql_error = execute_sql(result['sql'])
-                                if sql_error:
-                                    st.error(f"SQL Error: {sql_error}")
-                                elif df is not None:
-                                    st.success(f"Returned {len(df)} rows")
-                                    st.dataframe(df, use_container_width=True)
+                        # Store the SQL for execution
+                        st.session_state.generated_sql = result['sql']
+                
+                # Execute button (outside the generation spinner)
+                if 'generated_sql' in st.session_state and st.session_state.generated_sql:
+                    if st.button("▶️ Execute Query"):
+                        with st.spinner("Running query..."):
+                            df, sql_error = execute_sql(st.session_state.generated_sql)
+                            if sql_error:
+                                st.error(f"SQL Error: {sql_error}")
+                            elif df is not None:
+                                st.success(f"Returned {len(df)} rows")
+                                st.dataframe(df, use_container_width=True)
             else:
                 st.warning("Please enter a question")
     else:
-        st.warning("No semantic views available. Run BUILD_SEMANTIC_LAYER() first.")
+        st.warning("No archive tables found. Run the SCD load first to create archive tables.")
 
 # ============================================================================
 # PAGE: ABOUT
