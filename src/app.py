@@ -117,21 +117,18 @@ def get_archive_inventory():
 
 @st.cache_data(ttl=60)
 def get_semantic_views():
-    """Get available semantic views for Cortex queries"""
+    """Get available native Snowflake semantic views for Cortex Analyst"""
     session = get_session()
     try:
-        # Get semantic views from config
+        # Get semantic views from INFORMATION_SCHEMA
         df = session.sql("""
             SELECT 
-                SOURCE_SCHEMA,
-                VIEW_NAME,
-                VIEW_TYPE,
-                VIEW_COMMENT AS DESCRIPTION,
-                IS_ACTIVE,
-                CREATED_AT
-            FROM TEMPORAL_ARCHIVE.SEMANTIC.SEMANTIC_CONFIG
-            WHERE IS_ACTIVE = TRUE
-            ORDER BY SOURCE_SCHEMA, VIEW_NAME
+                SEMANTIC_VIEW_NAME,
+                COMMENT AS DESCRIPTION,
+                CREATED AS CREATED_AT
+            FROM TEMPORAL_ARCHIVE.INFORMATION_SCHEMA.SEMANTIC_VIEWS
+            WHERE SEMANTIC_VIEW_SCHEMA = 'SEMANTIC'
+            ORDER BY SEMANTIC_VIEW_NAME
         """).to_pandas()
         return df
     except:
@@ -175,73 +172,66 @@ def execute_sql(sql: str):
 # CORTEX INTEGRATION
 # ============================================================================
 
-def call_cortex_complete(prompt: str, semantic_view: str):
-    """Use Cortex COMPLETE to generate SQL from natural language"""
+def call_cortex_analyst(prompt: str, semantic_view: str):
+    """Use Cortex Analyst with native Snowflake Semantic Views"""
     session = get_session()
     
     try:
         # The semantic view is in TEMPORAL_ARCHIVE.SEMANTIC schema
-        semantic_table = f"TEMPORAL_ARCHIVE.SEMANTIC.{semantic_view}"
+        semantic_view_fqn = f"TEMPORAL_ARCHIVE.SEMANTIC.{semantic_view}"
         
-        # First check if the semantic view exists
-        try:
-            sample_df = session.sql(f"SELECT * FROM {semantic_table} LIMIT 1").to_pandas()
-            columns = list(sample_df.columns)
-            columns_str = ', '.join(columns[:30])
-        except Exception as e:
-            # If semantic view doesn't exist, it may not have been built yet
-            return None, f"Semantic view '{semantic_view}' not found. Please run BUILD_SEMANTIC_LAYER() first."
-        
-        # Build prompt for Cortex
+        # Escape the prompt
         escaped_prompt = prompt.replace("'", "''")
         
-        system_prompt = f"""Generate a Snowflake SQL query.
-
-VIEW: {semantic_table}
-COLUMNS: {columns_str}
-
-Question: {escaped_prompt}
-
-IMPORTANT:
-- Use SELECT with specific columns or aggregations
-- View name is exactly: {semantic_table}
-- Filter with "_IS_CURRENT" = TRUE for current records only
-- Add LIMIT 100 at the end
-- Return ONLY SQL, no explanations"""
-
-        # Call Cortex
+        # Call Cortex Analyst with the semantic view
+        # CORTEX.ANALYST generates SQL using the semantic model
         result = session.sql(f"""
-            SELECT SNOWFLAKE.CORTEX.COMPLETE(
-                'llama3.1-70b',
-                '{system_prompt.replace("'", "''")}'
+            SELECT SNOWFLAKE.CORTEX.ANALYST(
+                '{semantic_view_fqn}',
+                '{escaped_prompt}'
             ) AS response
         """).to_pandas()
         
         if not result.empty and result['RESPONSE'].iloc[0]:
-            sql = result['RESPONSE'].iloc[0].strip()
+            response = result['RESPONSE'].iloc[0]
             
-            # Clean up SQL
-            if '```' in sql:
-                parts = sql.split('```')
-                for part in parts:
-                    if 'SELECT' in part.upper():
-                        sql = part.strip()
-                        if sql.lower().startswith('sql'):
-                            sql = sql[3:].strip()
-                        break
-            
-            if ';' in sql:
-                sql = sql.split(';')[0] + ';'
-            
-            return {
-                "sql": sql,
-                "table": semantic_table
-            }, None
+            # Parse the response - Cortex Analyst returns structured output
+            if isinstance(response, dict):
+                sql = response.get('sql', '')
+                explanation = response.get('explanation', '')
+                return {
+                    "sql": sql,
+                    "explanation": explanation,
+                    "semantic_view": semantic_view_fqn
+                }, None
+            else:
+                # If response is string, try to extract SQL
+                sql = str(response).strip()
+                if '```' in sql:
+                    parts = sql.split('```')
+                    for part in parts:
+                        if 'SELECT' in part.upper():
+                            sql = part.strip()
+                            if sql.lower().startswith('sql'):
+                                sql = sql[3:].strip()
+                            break
+                
+                return {
+                    "sql": sql,
+                    "semantic_view": semantic_view_fqn
+                }, None
         else:
-            return None, "Could not generate SQL"
+            return None, "Cortex Analyst returned no response"
             
     except Exception as e:
-        return None, f"Error: {str(e)}"
+        error_msg = str(e)
+        # Provide helpful error messages
+        if "does not exist" in error_msg.lower():
+            return None, f"Semantic view '{semantic_view}' not found. Run 03_semantic_layer.sql first."
+        elif "not authorized" in error_msg.lower():
+            return None, "Not authorized to use Cortex Analyst. Check role permissions."
+        else:
+            return None, f"Cortex Analyst error: {error_msg}"
 
 # ============================================================================
 # SIDEBAR
@@ -557,11 +547,11 @@ def render_security_audit():
 # ============================================================================
 
 def render_cortex_page():
-    """Render Cortex Analyst interface"""
+    """Render Cortex Analyst interface with native Snowflake Semantic Views"""
     st.markdown("""
     <div class="main-header">
         <h1>🤖 Cortex Analyst</h1>
-        <p>Natural language queries on historical ACCOUNT_USAGE data</p>
+        <p>Natural language queries powered by Snowflake Semantic Views</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -570,121 +560,145 @@ def render_cortex_page():
     
     if not sem_views.empty:
         # View selector with friendly names
-        view_options = sem_views['VIEW_NAME'].tolist()
-        selected_view = st.selectbox("Select Analysis Type", view_options)
+        view_options = sem_views['SEMANTIC_VIEW_NAME'].tolist()
+        
+        # Create friendly display names
+        friendly_names = {
+            'COST_ANALYTICS': '💰 Cost Analytics - Credits, queries, and warehouse usage',
+            'SECURITY_ANALYTICS': '🔐 Security Analytics - Logins, users, and access patterns',
+            'STORAGE_ANALYTICS': '📦 Storage Analytics - Database and table storage trends',
+            'GOVERNANCE_ANALYTICS': '👥 Governance Analytics - Users, roles, and permissions'
+        }
+        
+        display_options = [friendly_names.get(v, v) for v in view_options]
+        selected_idx = st.selectbox(
+            "Select Analysis Domain", 
+            range(len(view_options)),
+            format_func=lambda i: display_options[i]
+        )
+        selected_view = view_options[selected_idx]
         
         # Show view description
-        view_info = sem_views[sem_views['VIEW_NAME'] == selected_view].iloc[0]
-        st.caption(view_info['DESCRIPTION'])
+        view_info = sem_views[sem_views['SEMANTIC_VIEW_NAME'] == selected_view].iloc[0]
+        if view_info['DESCRIPTION']:
+            st.caption(view_info['DESCRIPTION'])
         
         st.divider()
         
-        # Sample questions based on selected view
+        # Sample questions based on selected semantic view
         st.markdown("### 💡 Sample Questions")
         
-        # Dynamic sample questions based on semantic view
-        if 'WAREHOUSE' in selected_view.upper():
+        # Domain-specific sample questions
+        if selected_view == 'COST_ANALYTICS':
             sample_questions = [
-                "Show total credits by warehouse for the last year",
-                "Which warehouse uses the most credits?",
-                "Show credit usage trend by month"
+                "What are the total credits by warehouse?",
+                "Which users run the most expensive queries?",
+                "Show credit usage trend by month",
+                "What is the average query duration by warehouse size?"
             ]
-        elif 'LOGIN' in selected_view.upper() or 'SECURITY' in selected_view.upper():
+        elif selected_view == 'SECURITY_ANALYTICS':
             sample_questions = [
                 "Show failed login attempts by user",
-                "Which users have the most failed logins?",
-                "Show login activity by day"
+                "Which IP addresses have the most login failures?",
+                "What percentage of users have MFA enabled?",
+                "Show login patterns by client type"
             ]
-        elif 'QUERY' in selected_view.upper() or 'COST' in selected_view.upper():
+        elif selected_view == 'STORAGE_ANALYTICS':
             sample_questions = [
-                "Show query count by type",
-                "Which users run the most queries?",
-                "What is the average query duration by warehouse?"
+                "Show storage growth trend over time",
+                "Which databases use the most storage?",
+                "What is the total failsafe storage?",
+                "Show average daily storage by month"
             ]
-        elif 'USER' in selected_view.upper():
+        elif selected_view == 'GOVERNANCE_ANALYTICS':
             sample_questions = [
-                "List all users who are not disabled",
-                "Show users by default role",
-                "Which users have MFA enabled?"
-            ]
-        elif 'STORAGE' in selected_view.upper():
-            sample_questions = [
-                "Show storage usage trend over time",
-                "What is the total storage by date?",
-                "Show average storage by month"
-            ]
-        elif 'ROLE' in selected_view.upper():
-            sample_questions = [
-                "List all active roles",
-                "Show roles by owner",
-                "Which roles were created recently?"
-            ]
-        elif 'DATABASE' in selected_view.upper():
-            sample_questions = [
-                "List all databases",
-                "Show databases by owner",
-                "Which databases are transient?"
-            ]
-        elif 'TABLE' in selected_view.upper():
-            sample_questions = [
-                "Show largest tables by bytes",
-                "List tables with the most rows",
-                "Show table count by database"
+                "List all active users with their default roles",
+                "Which users don't have MFA enabled?",
+                "Show role assignments by owner",
+                "How many users are disabled?"
             ]
         else:
             sample_questions = [
-                "Show the first 10 records",
-                "Count total records",
-                "Show a summary of the data"
+                "Show a summary of the data",
+                "What are the key metrics?",
+                "Show trends over time"
             ]
         
-        cols = st.columns(3)
-        for i, q in enumerate(sample_questions[:3]):
-            with cols[i]:
-                if st.button(f"💬 {q[:28]}...", key=f"sample_{i}"):
+        cols = st.columns(2)
+        for i, q in enumerate(sample_questions[:4]):
+            with cols[i % 2]:
+                if st.button(f"💬 {q}", key=f"sample_{i}", use_container_width=True):
                     st.session_state.cortex_question = q
         
         st.divider()
         
         # Question input
         question = st.text_input(
-            "Ask a question",
+            "Ask a question in natural language",
             value=st.session_state.get('cortex_question', ''),
             placeholder=f"e.g., {sample_questions[0]}"
         )
         
-        if st.button("🚀 Ask Cortex", type="primary"):
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            ask_button = st.button("🚀 Ask Cortex", type="primary", use_container_width=True)
+        
+        if ask_button:
             if question:
-                with st.spinner("Generating SQL with Cortex..."):
-                    result, error = call_cortex_complete(question, selected_view)
+                with st.spinner("Cortex Analyst is analyzing your question..."):
+                    result, error = call_cortex_analyst(question, selected_view)
                     
                     if error:
                         st.error(error)
                     elif result:
+                        # Show explanation if available
+                        if result.get('explanation'):
+                            st.info(result['explanation'])
+                        
                         st.markdown("### Generated SQL")
                         st.code(result['sql'], language="sql")
                         
                         # Store the SQL for execution
                         st.session_state.generated_sql = result['sql']
-                
-                # Execute button (outside the generation spinner)
-                if 'generated_sql' in st.session_state and st.session_state.generated_sql:
-                    if st.button("▶️ Execute Query"):
-                        with st.spinner("Running query..."):
-                            df, sql_error = execute_sql(st.session_state.generated_sql)
-                            if sql_error:
-                                st.error(f"SQL Error: {sql_error}")
-                            elif df is not None:
-                                st.success(f"Returned {len(df)} rows")
-                                st.dataframe(df, use_container_width=True)
+                        st.session_state.show_execute = True
             else:
                 st.warning("Please enter a question")
+        
+        # Execute button (persistent after generation)
+        if st.session_state.get('show_execute') and st.session_state.get('generated_sql'):
+            st.divider()
+            if st.button("▶️ Execute Query", type="secondary"):
+                with st.spinner("Running query..."):
+                    df, sql_error = execute_sql(st.session_state.generated_sql)
+                    if sql_error:
+                        st.error(f"SQL Error: {sql_error}")
+                    elif df is not None:
+                        st.success(f"Returned {len(df)} rows")
+                        st.dataframe(df, use_container_width=True)
+                        
+                        # Download option
+                        csv = df.to_csv(index=False)
+                        st.download_button(
+                            "📥 Download CSV",
+                            csv,
+                            "cortex_results.csv",
+                            "text/csv"
+                        )
     else:
         st.warning("""
-        No semantic views available. To set up the semantic layer:
+        **No Semantic Views Found**
         
-        1. Run `03_semantic_layer.sql` in Snowflake
-        2. Call `TEMPORAL_ARCHIVE.SEMANTIC.BUILD_SEMANTIC_LAYER()` to create the views
+        To enable Cortex Analyst, run the following in Snowflake:
+        
+        ```sql
+        -- Run as DATA_ADMIN
+        USE ROLE DATA_ADMIN;
+        
+        -- Execute the semantic layer script
+        -- This creates native Snowflake Semantic Views
+        ```
+        
+        See `sql/03_semantic_layer.sql` for the complete setup.
         """)
 
 # ============================================================================
