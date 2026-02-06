@@ -117,23 +117,21 @@ def get_archive_inventory():
 
 @st.cache_data(ttl=60)
 def get_semantic_views():
-    """Get available archive tables for Cortex queries"""
+    """Get available semantic views for Cortex queries"""
     session = get_session()
     try:
-        # Get archive tables directly instead of relying on semantic config
+        # Get semantic views from config
         df = session.sql("""
             SELECT 
-                TABLE_SCHEMA AS SOURCE_SCHEMA,
-                TABLE_NAME AS VIEW_NAME,
-                'ARCHIVE' AS VIEW_TYPE,
-                'Archive table: ' || TABLE_NAME AS DESCRIPTION,
-                TRUE AS IS_ACTIVE,
-                CREATED AS CREATED_AT
-            FROM TEMPORAL_ARCHIVE.INFORMATION_SCHEMA.TABLES
-            WHERE TABLE_NAME LIKE '%_ARCHIVE'
-              AND TABLE_TYPE = 'BASE TABLE'
-            ORDER BY TABLE_SCHEMA, TABLE_NAME
-            LIMIT 50
+                SOURCE_SCHEMA,
+                VIEW_NAME,
+                VIEW_TYPE,
+                VIEW_COMMENT AS DESCRIPTION,
+                IS_ACTIVE,
+                CREATED_AT
+            FROM TEMPORAL_ARCHIVE.SEMANTIC.SEMANTIC_CONFIG
+            WHERE IS_ACTIVE = TRUE
+            ORDER BY SOURCE_SCHEMA, VIEW_NAME
         """).to_pandas()
         return df
     except:
@@ -177,36 +175,37 @@ def execute_sql(sql: str):
 # CORTEX INTEGRATION
 # ============================================================================
 
-def call_cortex_complete(prompt: str, table_name: str, schema_name: str):
+def call_cortex_complete(prompt: str, semantic_view: str):
     """Use Cortex COMPLETE to generate SQL from natural language"""
     session = get_session()
     
     try:
-        # Build the full table name
-        primary_table = f"TEMPORAL_ARCHIVE.{schema_name}.{table_name}"
+        # The semantic view is in TEMPORAL_ARCHIVE.SEMANTIC schema
+        semantic_table = f"TEMPORAL_ARCHIVE.SEMANTIC.{semantic_view}"
         
-        # Get column info from the archive table
+        # First check if the semantic view exists
         try:
-            sample_df = session.sql(f"SELECT * FROM {primary_table} LIMIT 1").to_pandas()
+            sample_df = session.sql(f"SELECT * FROM {semantic_table} LIMIT 1").to_pandas()
             columns = list(sample_df.columns)
             columns_str = ', '.join(columns[:30])
         except Exception as e:
-            return None, f"Could not access table {primary_table}: {str(e)}"
+            # If semantic view doesn't exist, it may not have been built yet
+            return None, f"Semantic view '{semantic_view}' not found. Please run BUILD_SEMANTIC_LAYER() first."
         
         # Build prompt for Cortex
         escaped_prompt = prompt.replace("'", "''")
         
         system_prompt = f"""Generate a Snowflake SQL query.
 
-TABLE: {primary_table}
+VIEW: {semantic_table}
 COLUMNS: {columns_str}
 
 Question: {escaped_prompt}
 
 IMPORTANT:
 - Use SELECT with specific columns or aggregations
-- Table name is exactly: {primary_table}
-- Filter with "_IS_CURRENT" = TRUE for current records
+- View name is exactly: {semantic_table}
+- Filter with "_IS_CURRENT" = TRUE for current records only
 - Add LIMIT 100 at the end
 - Return ONLY SQL, no explanations"""
 
@@ -236,7 +235,7 @@ IMPORTANT:
             
             return {
                 "sql": sql,
-                "table": primary_table
+                "table": semantic_table
             }, None
         else:
             return None, "Could not generate SQL"
@@ -566,71 +565,90 @@ def render_cortex_page():
     </div>
     """, unsafe_allow_html=True)
     
-    # Get archive tables
-    archive_tables = get_semantic_views()
+    # Get semantic views
+    sem_views = get_semantic_views()
     
-    if not archive_tables.empty:
-        # Schema filter
-        schemas = archive_tables['SOURCE_SCHEMA'].unique().tolist()
-        selected_schema = st.selectbox("Select Schema", schemas)
+    if not sem_views.empty:
+        # View selector with friendly names
+        view_options = sem_views['VIEW_NAME'].tolist()
+        selected_view = st.selectbox("Select Analysis Type", view_options)
         
-        # Filter tables by schema
-        schema_tables = archive_tables[archive_tables['SOURCE_SCHEMA'] == selected_schema]
-        table_options = schema_tables['VIEW_NAME'].tolist()
-        
-        selected_table = st.selectbox("Select Archive Table", table_options)
-        
-        # Show table description
-        st.caption(f"Query the {selected_table} table using natural language")
+        # Show view description
+        view_info = sem_views[sem_views['VIEW_NAME'] == selected_view].iloc[0]
+        st.caption(view_info['DESCRIPTION'])
         
         st.divider()
         
-        # Sample questions based on selected table
+        # Sample questions based on selected view
         st.markdown("### 💡 Sample Questions")
         
-        # Dynamic sample questions based on table name
-        if 'WAREHOUSE' in selected_table.upper():
+        # Dynamic sample questions based on semantic view
+        if 'WAREHOUSE' in selected_view.upper():
             sample_questions = [
-                "Show total credits by warehouse",
+                "Show total credits by warehouse for the last year",
                 "Which warehouse uses the most credits?",
                 "Show credit usage trend by month"
             ]
-        elif 'LOGIN' in selected_table.upper():
+        elif 'LOGIN' in selected_view.upper() or 'SECURITY' in selected_view.upper():
             sample_questions = [
                 "Show failed login attempts by user",
-                "Which users have the most logins?",
-                "Show login count by day"
+                "Which users have the most failed logins?",
+                "Show login activity by day"
             ]
-        elif 'QUERY' in selected_table.upper():
+        elif 'QUERY' in selected_view.upper() or 'COST' in selected_view.upper():
             sample_questions = [
                 "Show query count by type",
                 "Which users run the most queries?",
-                "Show average query duration by warehouse"
+                "What is the average query duration by warehouse?"
             ]
-        elif 'USER' in selected_table.upper():
+        elif 'USER' in selected_view.upper():
             sample_questions = [
-                "List all active users",
+                "List all users who are not disabled",
                 "Show users by default role",
                 "Which users have MFA enabled?"
+            ]
+        elif 'STORAGE' in selected_view.upper():
+            sample_questions = [
+                "Show storage usage trend over time",
+                "What is the total storage by date?",
+                "Show average storage by month"
+            ]
+        elif 'ROLE' in selected_view.upper():
+            sample_questions = [
+                "List all active roles",
+                "Show roles by owner",
+                "Which roles were created recently?"
+            ]
+        elif 'DATABASE' in selected_view.upper():
+            sample_questions = [
+                "List all databases",
+                "Show databases by owner",
+                "Which databases are transient?"
+            ]
+        elif 'TABLE' in selected_view.upper():
+            sample_questions = [
+                "Show largest tables by bytes",
+                "List tables with the most rows",
+                "Show table count by database"
             ]
         else:
             sample_questions = [
                 "Show the first 10 records",
                 "Count total records",
-                "Show distinct values"
+                "Show a summary of the data"
             ]
         
         cols = st.columns(3)
         for i, q in enumerate(sample_questions[:3]):
             with cols[i]:
-                if st.button(f"💬 {q[:25]}...", key=f"sample_{i}"):
+                if st.button(f"💬 {q[:28]}...", key=f"sample_{i}"):
                     st.session_state.cortex_question = q
         
         st.divider()
         
         # Question input
         question = st.text_input(
-            "Ask a question about this table",
+            "Ask a question",
             value=st.session_state.get('cortex_question', ''),
             placeholder=f"e.g., {sample_questions[0]}"
         )
@@ -638,7 +656,7 @@ def render_cortex_page():
         if st.button("🚀 Ask Cortex", type="primary"):
             if question:
                 with st.spinner("Generating SQL with Cortex..."):
-                    result, error = call_cortex_complete(question, selected_table, selected_schema)
+                    result, error = call_cortex_complete(question, selected_view)
                     
                     if error:
                         st.error(error)
@@ -662,7 +680,12 @@ def render_cortex_page():
             else:
                 st.warning("Please enter a question")
     else:
-        st.warning("No archive tables found. Run the SCD load first to create archive tables.")
+        st.warning("""
+        No semantic views available. To set up the semantic layer:
+        
+        1. Run `03_semantic_layer.sql` in Snowflake
+        2. Call `TEMPORAL_ARCHIVE.SEMANTIC.BUILD_SEMANTIC_LAYER()` to create the views
+        """)
 
 # ============================================================================
 # PAGE: ABOUT
