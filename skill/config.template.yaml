@@ -1,0 +1,97 @@
+# Temporal Archive Configuration
+# ================================
+# This file contains all configurable parameters for the Temporal Archive deployment.
+# Copy this file to config.yaml and customize for your environment.
+
+# =============================================================================
+# DATABASE & WAREHOUSE
+# =============================================================================
+database_name: TEMPORAL_ARCHIVE
+warehouse_name: TEMPORAL_ARCHIVE_WH
+warehouse_size: XSMALL                    # XSMALL, SMALL, MEDIUM, LARGE, XLARGE, etc.
+warehouse_auto_suspend_seconds: 60        # Auto-suspend after inactivity
+warehouse_min_clusters: 1
+warehouse_max_clusters: 1
+
+# =============================================================================
+# ROLES
+# =============================================================================
+admin_role: DATA_ADMIN                    # Primary owner role for all objects
+reader_role: TEMPORAL_ARCHIVE_READER      # Read-only access
+writer_role: TEMPORAL_ARCHIVE_WRITER      # Read + execute procedures
+archive_admin_role: TEMPORAL_ARCHIVE_ADMIN # Full admin access
+
+# =============================================================================
+# SCHEMAS
+# =============================================================================
+archive_schema: ARCHIVE                   # Core archive objects
+account_usage_schema: ACCOUNT_USAGE       # SCD tables from SNOWFLAKE.ACCOUNT_USAGE
+organization_usage_schema: ORGANIZATION_USAGE
+data_sharing_schema: DATA_SHARING_USAGE
+reader_account_schema: READER_ACCOUNT_USAGE
+semantic_schema: SEMANTIC                 # Semantic views for Cortex Analyst
+agents_schema: AGENTS                     # Cortex Agents
+streamlit_schema: STREAMLIT               # Streamlit app objects
+
+# =============================================================================
+# BACKUP POLICY (WORM Compliance)
+# =============================================================================
+backup_policy_name: TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY
+backup_retention_days: 2555               # 7 years for regulatory compliance
+backup_schedule_minutes: 1440             # Daily backups (24 hours = 1440 minutes)
+# Note: WORM retention lock cannot be disabled once set. 
+# Set retention_days: 0 to disable backup policy creation.
+
+# =============================================================================
+# TASK SCHEDULING
+# =============================================================================
+# SCD Type 2 loads run twice daily to capture changes
+morning_load_hour: 6                      # 6 AM in specified timezone
+evening_load_hour: 18                     # 6 PM in specified timezone  
+timezone: America/New_York                # Timezone for task scheduling
+# For high-frequency environments, consider hourly loads by modifying the task schedules
+
+# =============================================================================
+# AGENT CONFIGURATION
+# =============================================================================
+agent_name: SNOWFLAKE_INTELLIGENCE
+agent_timeout_seconds: 900                # 15 minute timeout
+agent_token_budget: 400000                # Token budget for agent responses
+query_timeout_seconds: 299                # Per-query timeout
+
+# =============================================================================
+# STREAMLIT APP
+# =============================================================================
+streamlit_app_name: TEMPORAL_ARCHIVE_APP
+cortex_model: llama3.1-70b               # Model for Cortex Complete
+session_cache_ttl_seconds: 300            # 5 minutes
+data_cache_ttl_seconds: 60                # 1 minute
+
+# =============================================================================
+# CONNECTION
+# =============================================================================
+# The Snowflake connection to use (from Cortex Code connections)
+connection: default
+
+# =============================================================================
+# SOURCE VIEWS
+# =============================================================================
+# Which ACCOUNT_USAGE view categories to archive
+# Set to false to skip certain categories
+archive_sources:
+  account_usage: true                     # 58 views from SNOWFLAKE.ACCOUNT_USAGE
+  organization_usage: true                # 14 views from SNOWFLAKE.ORGANIZATION_USAGE
+  data_sharing_usage: true                # 3 views from SNOWFLAKE.DATA_SHARING_USAGE
+  reader_account_usage: true              # 4 views from SNOWFLAKE.READER_ACCOUNT_USAGE
+
+# =============================================================================
+# OPTIONAL FEATURES
+# =============================================================================
+features:
+  create_backup_policy: true              # Create WORM backup policy
+  create_semantic_views: true             # Create Cortex Analyst semantic views
+  create_agent: true                      # Create Cortex Intelligence Agent
+  create_streamlit_objects: true          # Create Streamlit support objects
+  deploy_streamlit_app: false             # Deploy Streamlit app (requires app.py upload)
+  enable_tasks: true                      # Enable scheduled SCD load tasks
+  run_initial_load: true                  # Run initial SCD load after deployment

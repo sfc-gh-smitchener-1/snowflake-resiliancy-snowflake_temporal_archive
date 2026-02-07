@@ -1219,6 +1219,85 @@ The current backup policy applies to the entire database. For table-level retent
 
 ---
 
+## Cortex Code Skill (Self-Service Deployment)
+
+This repository includes a **Cortex Code skill** that enables self-service deployment to any Snowflake account. SEs, architects, and customers can deploy the entire Temporal Archive solution with customizable parameters.
+
+### Quick Start with Cortex Code
+
+```
+Deploy Temporal Archive to my account
+```
+
+Or with custom configuration:
+
+```
+Deploy Temporal Archive with database name MY_ARCHIVE and warehouse MY_WAREHOUSE
+```
+
+### Skill Files
+
+```
+skill/
+├── SKILL.md                    # Main skill entry point
+├── config.template.yaml        # Configuration template
+├── templates/                  # Parameterized SQL templates
+│   ├── 01_initial_setup.sql    # Infrastructure
+│   ├── 02_scd_load.sql         # SCD procedures & tasks
+│   ├── 03_semantic_layer.sql   # Semantic views
+│   ├── 04_streamlit_ddl.sql    # Streamlit support
+│   └── agent_config.json       # Agent specification
+└── scripts/
+    ├── deploy.py               # Full deployment script
+    └── quick_setup.py          # Interactive setup helper
+```
+
+### Configuration Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `database_name` | TEMPORAL_ARCHIVE | Target database |
+| `warehouse_name` | TEMPORAL_ARCHIVE_WH | Compute warehouse |
+| `admin_role` | DATA_ADMIN | Primary admin role |
+| `backup_retention_days` | 2555 | 7-year WORM retention |
+| `morning_load_hour` | 6 | Morning SCD load time |
+| `evening_load_hour` | 18 | Evening SCD load time |
+| `timezone` | America/New_York | Task timezone |
+
+### Manual Deployment
+
+1. **Generate SQL with custom parameters:**
+   ```bash
+   cd skill/scripts
+   python quick_setup.py --defaults  # Or interactive mode
+   ```
+
+2. **Run generated SQL in Snowflake Worksheets:**
+   - `generated/01_initial_setup.sql` (as ACCOUNTADMIN)
+   - `generated/02_scd_load.sql` (as DATA_ADMIN)
+   - `generated/03_semantic_layer.sql` (as DATA_ADMIN)
+   - `generated/04_streamlit_ddl.sql` (as DATA_ADMIN)
+
+3. **Create the Cortex Agent:**
+   - Use `generated/agent_config.json` with the agent REST API
+   - Or use the `agent-optimization` Cortex Code skill
+
+4. **Run initial data load:**
+   ```sql
+   CALL TEMPORAL_ARCHIVE.ARCHIVE.RUN_SCD_LOAD();
+   ```
+
+### What Gets Deployed
+
+- **186 SCD Type 2 archive tables** from ACCOUNT_USAGE and ORGANIZATION_USAGE
+- **8 Semantic Views** for Cortex Analyst natural language queries
+- **1 Cortex Intelligence Agent** with 8 tools for deep account analysis
+- **2 Scheduled Tasks** for automated twice-daily data loads
+- **1 WORM Backup Policy** for 7-year compliance retention
+- **Role hierarchy** (admin, writer, reader roles)
+
+---
+
 ## Contributing
 
 When contributing to this project:

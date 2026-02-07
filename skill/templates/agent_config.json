@@ -1,0 +1,139 @@
+{
+  "models": {
+    "orchestration": "auto"
+  },
+  "orchestration": {
+    "budget": {
+      "seconds": {{AGENT_TIMEOUT_SECONDS}},
+      "tokens": {{AGENT_TOKEN_BUDGET}}
+    }
+  },
+  "instructions": {
+    "orchestration": "You are a Snowflake Intelligence Agent providing deep account analysis across costs, security, storage, governance, and disaster recovery. You have access to 8 specialized semantic views built from archived ACCOUNT_USAGE data with SCD Type 2 history preservation.\n\nTOOL SELECTION GUIDELINES:\n\n1. **Cost Analysis Questions:**\n   - For warehouse/compute costs, query performance, user cost attribution → use `query_warehouse_costs`\n   - For serverless costs (dynamic tables, tasks, pipes, clustering) → use `query_serverless_costs`\n   - For general cost overview → use `query_costs`\n\n2. **Business Continuity & Disaster Recovery:**\n   - For RPO/RTO analysis, storage inventory, data churn, hot tables → use `query_bcdr`\n   - For replication costs and patterns → use `query_bcdr`\n\n3. **Security & Access:**\n   - For login history, failed attempts, MFA status → use `query_security`\n   - For user/role management, grants → use `query_governance`\n\n4. **Storage & Capacity:**\n   - For database/table storage trends, growth analysis → use `query_storage`\n   - For DR storage (failsafe, time travel) → use `query_bcdr`\n\n5. **Operations:**\n   - For task execution, failures, scheduling → use `query_tasks`\n   - For dynamic table refresh patterns → use `query_serverless_costs`\n\nALWAYS:\n- Include _IS_CURRENT = TRUE filter for current records\n- Convert bytes to GB or TB for readability (divide by POWER(1024,3) or POWER(1024,4))\n- Use appropriate date ranges for trending analysis\n- Provide business context with your answers",
+    "response": "Provide clear, actionable insights with:\n1. Direct answer to the question\n2. Supporting data in formatted tables when appropriate\n3. Business implications or recommendations\n4. Suggestions for related follow-up questions\n\nFormat large numbers with commas and round decimals appropriately. Always specify units (credits, GB, TB, etc.)."
+  },
+  "tools": [
+    {
+      "tool_spec": {
+        "type": "cortex_analyst_text_to_sql",
+        "name": "query_warehouse_costs",
+        "description": "Query warehouse compute costs, query history, and performance metrics. Use for: warehouse credit consumption, cost by user/role/query tag, query duration and performance, warehouse sizing recommendations, bytes scanned analysis, failed queries. Supports questions like: Which warehouses cost the most? Who is consuming credits? What queries are expensive?"
+      }
+    },
+    {
+      "tool_spec": {
+        "type": "cortex_analyst_text_to_sql",
+        "name": "query_serverless_costs",
+        "description": "Query serverless compute costs including dynamic tables, serverless tasks, Snowpipe, and auto-clustering. Use for: dynamic table refresh patterns and frequency, serverless task credits, pipe ingestion costs, clustering costs by table, daily service-level cost breakdown. Supports questions like: How much are dynamic tables costing? Which DTs run most frequently? What's my serverless spend?"
+      }
+    },
+    {
+      "tool_spec": {
+        "type": "cortex_analyst_text_to_sql",
+        "name": "query_costs",
+        "description": "Query general cost analytics combining warehouse metering with query history. Use for: overall credit consumption, cost trends over time, basic cost breakdown. Best for general cost questions before drilling into warehouse or serverless specifics."
+      }
+    },
+    {
+      "tool_spec": {
+        "type": "cortex_analyst_text_to_sql",
+        "name": "query_bcdr",
+        "description": "Query Business Continuity and Disaster Recovery metrics. Use for: RPO analysis (replication lag), RTO analysis (data churn), storage inventory (active/time travel/failsafe), hot tables with high churn, database-level churn percentages, replication costs and events. Supports questions like: What are my hot tables? What's my churn rate? Show storage breakdown for DR planning."
+      }
+    },
+    {
+      "tool_spec": {
+        "type": "cortex_analyst_text_to_sql",
+        "name": "query_security",
+        "description": "Query security and authentication analytics. Use for: login history and patterns, failed login attempts, MFA adoption, client types, IP addresses, authentication methods. Supports questions like: Show failed logins, Who logged in from which IPs? What's our MFA adoption rate?"
+      }
+    },
+    {
+      "tool_spec": {
+        "type": "cortex_analyst_text_to_sql",
+        "name": "query_storage",
+        "description": "Query storage analytics for capacity planning. Use for: account/database/table storage trends, storage growth over time, time travel and failsafe storage, stage storage. Supports questions like: What databases are largest? How is storage growing? What tables use most space?"
+      }
+    },
+    {
+      "tool_spec": {
+        "type": "cortex_analyst_text_to_sql",
+        "name": "query_governance",
+        "description": "Query user and role governance analytics. Use for: user account status, role assignments, grants, MFA status, inactive users, role hierarchy. Supports questions like: Which users have MFA? Who has what roles? Show inactive users."
+      }
+    },
+    {
+      "tool_spec": {
+        "type": "cortex_analyst_text_to_sql",
+        "name": "query_tasks",
+        "description": "Query task execution analytics. Use for: task success/failure rates, scheduling patterns, error analysis, task graph dependencies, retry patterns. Supports questions like: Which tasks are failing? What's the task success rate? Show task errors."
+      }
+    }
+  ],
+  "tool_resources": {
+    "query_warehouse_costs": {
+      "execution_environment": {
+        "query_timeout": {{QUERY_TIMEOUT_SECONDS}},
+        "type": "warehouse",
+        "warehouse": "{{WAREHOUSE_NAME}}"
+      },
+      "semantic_view": "{{DATABASE_NAME}}.{{SEMANTIC_SCHEMA}}.WAREHOUSE_COST_ANALYTICS"
+    },
+    "query_serverless_costs": {
+      "execution_environment": {
+        "query_timeout": {{QUERY_TIMEOUT_SECONDS}},
+        "type": "warehouse",
+        "warehouse": "{{WAREHOUSE_NAME}}"
+      },
+      "semantic_view": "{{DATABASE_NAME}}.{{SEMANTIC_SCHEMA}}.SERVERLESS_COST_ANALYTICS"
+    },
+    "query_costs": {
+      "execution_environment": {
+        "query_timeout": {{QUERY_TIMEOUT_SECONDS}},
+        "type": "warehouse",
+        "warehouse": "{{WAREHOUSE_NAME}}"
+      },
+      "semantic_view": "{{DATABASE_NAME}}.{{SEMANTIC_SCHEMA}}.COST_ANALYTICS"
+    },
+    "query_bcdr": {
+      "execution_environment": {
+        "query_timeout": {{QUERY_TIMEOUT_SECONDS}},
+        "type": "warehouse",
+        "warehouse": "{{WAREHOUSE_NAME}}"
+      },
+      "semantic_view": "{{DATABASE_NAME}}.{{SEMANTIC_SCHEMA}}.BCDR_ANALYTICS"
+    },
+    "query_security": {
+      "execution_environment": {
+        "query_timeout": {{QUERY_TIMEOUT_SECONDS}},
+        "type": "warehouse",
+        "warehouse": "{{WAREHOUSE_NAME}}"
+      },
+      "semantic_view": "{{DATABASE_NAME}}.{{SEMANTIC_SCHEMA}}.SECURITY_ANALYTICS"
+    },
+    "query_storage": {
+      "execution_environment": {
+        "query_timeout": {{QUERY_TIMEOUT_SECONDS}},
+        "type": "warehouse",
+        "warehouse": "{{WAREHOUSE_NAME}}"
+      },
+      "semantic_view": "{{DATABASE_NAME}}.{{SEMANTIC_SCHEMA}}.STORAGE_ANALYTICS"
+    },
+    "query_governance": {
+      "execution_environment": {
+        "query_timeout": {{QUERY_TIMEOUT_SECONDS}},
+        "type": "warehouse",
+        "warehouse": "{{WAREHOUSE_NAME}}"
+      },
+      "semantic_view": "{{DATABASE_NAME}}.{{SEMANTIC_SCHEMA}}.GOVERNANCE_ANALYTICS"
+    },
+    "query_tasks": {
+      "execution_environment": {
+        "query_timeout": {{QUERY_TIMEOUT_SECONDS}},
+        "type": "warehouse",
+        "warehouse": "{{WAREHOUSE_NAME}}"
+      },
+      "semantic_view": "{{DATABASE_NAME}}.{{SEMANTIC_SCHEMA}}.TASK_ANALYTICS"
+    }
+  }
+}

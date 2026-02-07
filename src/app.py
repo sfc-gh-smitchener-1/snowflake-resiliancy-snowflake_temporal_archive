@@ -847,12 +847,23 @@ def render_cortex_page():
                         if result.get('explanation'):
                             st.info(result['explanation'])
                         
-                        st.markdown("### Generated SQL")
-                        st.code(result['sql'], language="sql")
-                        
-                        # Store the SQL for execution
-                        st.session_state.generated_sql = result['sql']
-                        st.session_state.show_execute = True
+                        # Check if SQL was generated
+                        if result.get('sql'):
+                            st.markdown("### Generated SQL")
+                            st.code(result['sql'], language="sql")
+                            
+                            # Store the SQL for execution
+                            st.session_state.generated_sql = result['sql']
+                            st.session_state.show_execute = True
+                        elif result.get('suggestions'):
+                            # Show suggestions if Cortex couldn't generate SQL
+                            st.warning("Cortex Analyst couldn't generate SQL for that question. Try one of these suggestions:")
+                            for suggestion in result['suggestions']:
+                                if st.button(f"💡 {suggestion}", key=f"suggest_{suggestion[:20]}"):
+                                    st.session_state.cortex_question = suggestion
+                                    st.rerun()
+                        else:
+                            st.info("Cortex Analyst provided an explanation but no SQL query.")
             else:
                 st.warning("Please enter a question")
         
