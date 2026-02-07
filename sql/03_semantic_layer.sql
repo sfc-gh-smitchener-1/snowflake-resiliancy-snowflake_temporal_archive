@@ -92,16 +92,16 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.COST_ANALYTICS
     )
     
     METRICS (
-        WAREHOUSE_METERING.total_credits AS SUM(CREDITS_USED)
+        WAREHOUSE_METERING.total_credits AS SUM(WAREHOUSE_METERING.CREDITS_USED)
             WITH SYNONYMS ('total cost', 'total credits used')
             COMMENT = 'Sum of all credits consumed',
-        QUERY_HISTORY.total_queries AS COUNT(QUERY_ID)
+        QUERY_HISTORY.total_queries AS COUNT(QUERY_HISTORY.QUERY_ID)
             WITH SYNONYMS ('query count', 'number of queries')
             COMMENT = 'Total number of queries executed',
-        QUERY_HISTORY.avg_query_duration AS AVG(TOTAL_ELAPSED_TIME)
+        QUERY_HISTORY.avg_query_duration AS AVG(QUERY_HISTORY.TOTAL_ELAPSED_TIME)
             WITH SYNONYMS ('average duration', 'mean execution time')
             COMMENT = 'Average query execution time',
-        QUERY_HISTORY.total_bytes_scanned AS SUM(BYTES_SCANNED)
+        QUERY_HISTORY.total_bytes_scanned AS SUM(QUERY_HISTORY.BYTES_SCANNED)
             WITH SYNONYMS ('total data scanned')
             COMMENT = 'Total bytes scanned across all queries'
     )
@@ -175,13 +175,13 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.SECURITY_ANALYTICS
     )
     
     METRICS (
-        LOGIN_HISTORY.total_logins AS COUNT(EVENT_ID)
+        LOGIN_HISTORY.total_logins AS COUNT(LOGIN_HISTORY.EVENT_ID)
             WITH SYNONYMS ('login count', 'total attempts')
             COMMENT = 'Total number of login attempts',
-        LOGIN_HISTORY.failed_logins AS SUM(CASE WHEN IS_SUCCESS = 'NO' THEN 1 ELSE 0 END)
+        LOGIN_HISTORY.failed_logins AS SUM(CASE WHEN LOGIN_HISTORY.IS_SUCCESS = 'NO' THEN 1 ELSE 0 END)
             WITH SYNONYMS ('failed count', 'bad logins', 'failures')
             COMMENT = 'Number of failed login attempts',
-        LOGIN_HISTORY.unique_users AS COUNT(DISTINCT USER_NAME)
+        LOGIN_HISTORY.unique_users AS COUNT(DISTINCT LOGIN_HISTORY.USER_NAME)
             WITH SYNONYMS ('distinct users', 'user count')
             COMMENT = 'Number of unique users attempting login'
     )
@@ -218,7 +218,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.STORAGE_ANALYTICS
         STORAGE_USAGE.failsafe_bytes AS AVERAGE_FAILSAFE_BYTES
             WITH SYNONYMS ('failsafe bytes', 'backup storage')
             COMMENT = 'Average failsafe storage in bytes',
-        DATABASE_STORAGE.db_bytes AS AVERAGE_DATABASE_BYTES
+        DATABASE_STORAGE.db_average_bytes AS AVERAGE_DATABASE_BYTES
             WITH SYNONYMS ('database size')
             COMMENT = 'Database size in bytes',
         DATABASE_STORAGE.db_failsafe_bytes AS AVERAGE_FAILSAFE_BYTES
@@ -235,13 +235,13 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.STORAGE_ANALYTICS
     )
     
     METRICS (
-        STORAGE_USAGE.total_storage_bytes AS SUM(AVERAGE_DATABASE_BYTES)
+        STORAGE_USAGE.total_storage_bytes AS SUM(STORAGE_USAGE.AVERAGE_DATABASE_BYTES)
             WITH SYNONYMS ('total storage', 'total bytes')
             COMMENT = 'Total storage across all dates',
-        STORAGE_USAGE.total_storage_tb AS SUM(AVERAGE_DATABASE_BYTES) / POWER(1024, 4)
+        STORAGE_USAGE.total_storage_tb AS SUM(STORAGE_USAGE.AVERAGE_DATABASE_BYTES) / POWER(1024, 4)
             WITH SYNONYMS ('storage terabytes', 'tb used')
             COMMENT = 'Total storage in terabytes',
-        STORAGE_USAGE.avg_daily_storage AS AVG(AVERAGE_DATABASE_BYTES)
+        STORAGE_USAGE.avg_daily_storage AS AVG(STORAGE_USAGE.AVERAGE_DATABASE_BYTES)
             WITH SYNONYMS ('average storage')
             COMMENT = 'Average daily storage usage'
     )
@@ -316,16 +316,16 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.GOVERNANCE_ANALYTICS
     )
     
     METRICS (
-        USERS.total_users AS COUNT(DISTINCT USER_ID)
+        USERS.total_users AS COUNT(DISTINCT USERS.USER_ID)
             WITH SYNONYMS ('user count', 'number of users')
             COMMENT = 'Total number of users',
-        USERS.active_users AS SUM(CASE WHEN DISABLED = FALSE THEN 1 ELSE 0 END)
+        USERS.active_users AS SUM(CASE WHEN USERS.DISABLED = FALSE THEN 1 ELSE 0 END)
             WITH SYNONYMS ('enabled users', 'active count')
             COMMENT = 'Number of active (not disabled) users',
-        USERS.disabled_users AS SUM(CASE WHEN DISABLED = TRUE THEN 1 ELSE 0 END)
+        USERS.disabled_users AS SUM(CASE WHEN USERS.DISABLED = TRUE THEN 1 ELSE 0 END)
             WITH SYNONYMS ('inactive users', 'disabled count')
             COMMENT = 'Number of disabled users',
-        ROLES.total_roles AS COUNT(DISTINCT ROLE_ID)
+        ROLES.total_roles AS COUNT(DISTINCT ROLES.ROLE_ID)
             WITH SYNONYMS ('role count', 'number of roles')
             COMMENT = 'Total number of roles'
     )
