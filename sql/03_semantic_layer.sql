@@ -26,6 +26,7 @@ CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.SEMANTIC
 -- =============================================================================
 -- SEMANTIC VIEW: COST ANALYTICS
 -- Combines warehouse metering with query history for cost analysis
+-- Columns verified from SNOWFLAKE.ACCOUNT_USAGE views
 -- =============================================================================
 
 CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.COST_ANALYTICS
@@ -114,6 +115,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.COST_ANALYTICS
 -- =============================================================================
 -- SEMANTIC VIEW: SECURITY ANALYTICS
 -- Login history and user activity for security auditing
+-- Columns verified from SNOWFLAKE.ACCOUNT_USAGE views
 -- =============================================================================
 
 CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.SECURITY_ANALYTICS
@@ -194,6 +196,8 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.SECURITY_ANALYTICS
 -- =============================================================================
 -- SEMANTIC VIEW: STORAGE ANALYTICS
 -- Database and table storage for capacity planning
+-- STORAGE_USAGE columns: USAGE_DATE, STORAGE_BYTES, STAGE_BYTES, FAILSAFE_BYTES
+-- DATABASE_STORAGE columns: USAGE_DATE, DATABASE_ID, DATABASE_NAME, AVERAGE_DATABASE_BYTES, AVERAGE_FAILSAFE_BYTES
 -- =============================================================================
 
 CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.STORAGE_ANALYTICS
@@ -209,19 +213,20 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.STORAGE_ANALYTICS
     )
     
     FACTS (
-        STORAGE_USAGE.database_bytes AS STORAGE_USAGE.AVERAGE_DATABASE_BYTES
-            WITH SYNONYMS ('database bytes', 'db storage bytes')
-            COMMENT = 'Average database storage in bytes',
-        STORAGE_USAGE.stage_bytes AS STORAGE_USAGE.AVERAGE_STAGE_BYTES
+        STORAGE_USAGE.storage_bytes AS STORAGE_USAGE.STORAGE_BYTES
+            WITH SYNONYMS ('storage bytes', 'db storage bytes')
+            COMMENT = 'Total storage in bytes',
+        STORAGE_USAGE.stage_bytes AS STORAGE_USAGE.STAGE_BYTES
             WITH SYNONYMS ('stage bytes', 'staging storage')
-            COMMENT = 'Average stage storage in bytes',
-        STORAGE_USAGE.failsafe_bytes AS STORAGE_USAGE.AVERAGE_FAILSAFE_BYTES
+            COMMENT = 'Stage storage in bytes',
+        STORAGE_USAGE.failsafe_bytes AS STORAGE_USAGE.FAILSAFE_BYTES
             WITH SYNONYMS ('failsafe bytes', 'backup storage')
-            COMMENT = 'Average failsafe storage in bytes',
+            COMMENT = 'Failsafe storage in bytes',
         DATABASE_STORAGE.db_average_bytes AS DATABASE_STORAGE.AVERAGE_DATABASE_BYTES
-            WITH SYNONYMS ('database size')
-            COMMENT = 'Database size in bytes',
+            WITH SYNONYMS ('database size', 'average database bytes')
+            COMMENT = 'Average database size in bytes',
         DATABASE_STORAGE.db_failsafe_bytes AS DATABASE_STORAGE.AVERAGE_FAILSAFE_BYTES
+            WITH SYNONYMS ('database failsafe')
             COMMENT = 'Database failsafe storage in bytes'
     )
     
@@ -231,17 +236,20 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.STORAGE_ANALYTICS
             COMMENT = 'Date of storage measurement',
         DATABASE_STORAGE.database_name AS DATABASE_STORAGE.DATABASE_NAME
             WITH SYNONYMS ('database', 'db name')
-            COMMENT = 'Name of the database'
+            COMMENT = 'Name of the database',
+        DATABASE_STORAGE.db_usage_date AS DATABASE_STORAGE.USAGE_DATE
+            WITH SYNONYMS ('db date')
+            COMMENT = 'Date of database storage measurement'
     )
     
     METRICS (
-        STORAGE_USAGE.total_storage_bytes AS SUM(STORAGE_USAGE.database_bytes)
+        STORAGE_USAGE.total_storage_bytes AS SUM(STORAGE_USAGE.storage_bytes)
             WITH SYNONYMS ('total storage', 'total bytes')
             COMMENT = 'Total storage across all dates',
-        STORAGE_USAGE.total_storage_tb AS SUM(STORAGE_USAGE.database_bytes) / POWER(1024, 4)
+        STORAGE_USAGE.total_storage_tb AS SUM(STORAGE_USAGE.storage_bytes) / POWER(1024, 4)
             WITH SYNONYMS ('storage terabytes', 'tb used')
             COMMENT = 'Total storage in terabytes',
-        STORAGE_USAGE.avg_daily_storage AS AVG(STORAGE_USAGE.database_bytes)
+        STORAGE_USAGE.avg_daily_storage AS AVG(STORAGE_USAGE.storage_bytes)
             WITH SYNONYMS ('average storage')
             COMMENT = 'Average daily storage usage'
     )
@@ -254,6 +262,9 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.STORAGE_ANALYTICS
 -- =============================================================================
 -- SEMANTIC VIEW: GOVERNANCE ANALYTICS
 -- User and role management for governance
+-- USERS columns: USER_ID, NAME, LOGIN_NAME, EMAIL, DEFAULT_WAREHOUSE, DEFAULT_ROLE, CREATED_ON, DISABLED (VARIANT), HAS_MFA
+-- ROLES columns: ROLE_ID, NAME, OWNER, CREATED_ON
+-- GRANTS_TO_USERS columns: CREATED_ON, ROLE, GRANTEE_NAME
 -- =============================================================================
 
 CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.GOVERNANCE_ANALYTICS
@@ -300,7 +311,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.GOVERNANCE_ANALYTICS
             COMMENT = 'When user was created',
         USERS.user_disabled AS USERS.DISABLED
             WITH SYNONYMS ('is disabled', 'inactive')
-            COMMENT = 'Whether user is disabled',
+            COMMENT = 'Whether user is disabled (VARIANT type)',
         USERS.has_mfa AS USERS.HAS_MFA
             WITH SYNONYMS ('mfa', 'multi-factor auth')
             COMMENT = 'Whether MFA is enabled',
@@ -319,19 +330,13 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.GOVERNANCE_ANALYTICS
         USERS.total_users AS COUNT(DISTINCT USERS.USER_ID)
             WITH SYNONYMS ('user count', 'number of users')
             COMMENT = 'Total number of users',
-        USERS.active_users AS SUM(CASE WHEN USERS.user_disabled = FALSE THEN 1 ELSE 0 END)
-            WITH SYNONYMS ('enabled users', 'active count')
-            COMMENT = 'Number of active (not disabled) users',
-        USERS.disabled_users AS SUM(CASE WHEN USERS.user_disabled = TRUE THEN 1 ELSE 0 END)
-            WITH SYNONYMS ('inactive users', 'disabled count')
-            COMMENT = 'Number of disabled users',
         ROLES.total_roles AS COUNT(DISTINCT ROLES.ROLE_ID)
             WITH SYNONYMS ('role count', 'number of roles')
             COMMENT = 'Total number of roles'
     )
     
     COMMENT = 'User and role governance analytics'
-    AI_SQL_GENERATION 'Always filter with "_IS_CURRENT" = TRUE to get current records. DISABLED is a boolean - TRUE means user cannot log in. HAS_MFA is a boolean indicating multi-factor authentication status.'
+    AI_SQL_GENERATION 'Always filter with "_IS_CURRENT" = TRUE to get current records. DISABLED is a VARIANT type - check for string values. HAS_MFA is a boolean indicating multi-factor authentication status.'
     AI_QUESTION_CATEGORIZATION 'This semantic view answers questions about: User account management, Role assignments and hierarchy, Security posture and MFA adoption.';
 
 
