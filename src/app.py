@@ -200,14 +200,15 @@ def get_semantic_views() -> pd.DataFrame:
     session = get_session()
     try:
         # Get semantic views from INFORMATION_SCHEMA
+        # Column names: CATALOG, SCHEMA, NAME, OWNER, CREATED, COMMENT
         df = session.sql("""
             SELECT 
-                SEMANTIC_VIEW_NAME,
+                NAME AS SEMANTIC_VIEW_NAME,
                 COMMENT AS DESCRIPTION,
                 CREATED AS CREATED_AT
             FROM TEMPORAL_ARCHIVE.INFORMATION_SCHEMA.SEMANTIC_VIEWS
-            WHERE SEMANTIC_VIEW_SCHEMA = 'SEMANTIC'
-            ORDER BY SEMANTIC_VIEW_NAME
+            WHERE SCHEMA = 'SEMANTIC'
+            ORDER BY NAME
         """).to_pandas()
         return df
     except Exception as e:
