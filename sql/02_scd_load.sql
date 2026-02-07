@@ -9,6 +9,13 @@ SNOWFLAKE.ORGANIZATION_USAGE and archives them using SCD Type 2 with:
   - Row hash for change detection
   - No hardcoded PK mappings needed
 
+TIMEZONE HANDLING:
+  - All timestamps use TIMESTAMP_NTZ (no timezone) via CURRENT_TIMESTAMP()
+  - Tasks are scheduled in America/New_York timezone (6 AM and 6 PM ET)
+  - _LOADED_AT, _VALID_FROM, _VALID_TO columns store UTC-equivalent times
+  - When querying, be aware that timestamps are session timezone dependent
+  - For consistent reporting, use CONVERT_TIMEZONE() when needed
+
 Run this script in a Snowflake Worksheet after 01_initial_setup.sql.
 
 Reference: https://docs.snowflake.com/en/user-guide/backups
@@ -167,7 +174,17 @@ INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW) 
 ('ORGANIZATION_USAGE', 'QUERY_ACCELERATION_HISTORY'),
 ('ORGANIZATION_USAGE', 'PIPE_USAGE_HISTORY'),
 ('ORGANIZATION_USAGE', 'MARKETPLACE_DISBURSEMENT_REPORT'),
-('ORGANIZATION_USAGE', 'MARKETPLACE_PAID_USAGE_DAILY');
+('ORGANIZATION_USAGE', 'MARKETPLACE_PAID_USAGE_DAILY'),
+-- DATA_SHARING_USAGE views (for accounts with data sharing enabled)
+('DATA_SHARING_USAGE', 'LISTING_EVENTS_DAILY'),
+('DATA_SHARING_USAGE', 'LISTING_TELEMETRY_DAILY'),
+('DATA_SHARING_USAGE', 'MARKETPLACE_PAID_USAGE_DAILY'),
+-- READER_ACCOUNT_USAGE views (for accounts with reader accounts)
+('READER_ACCOUNT_USAGE', 'LOGIN_HISTORY'),
+('READER_ACCOUNT_USAGE', 'QUERY_HISTORY'),
+('READER_ACCOUNT_USAGE', 'RESOURCE_MONITORS'),
+('READER_ACCOUNT_USAGE', 'STORAGE_USAGE'),
+('READER_ACCOUNT_USAGE', 'WAREHOUSE_METERING_HISTORY');
 
 -- =============================================================================
 -- PROCEDURE: LOAD_VIEW_ARCHIVE
@@ -192,6 +209,7 @@ DECLARE
     v_target_fqn VARCHAR;
     v_target_schema VARCHAR;
     v_table_exists INTEGER DEFAULT 0;
+    v_source_exists INTEGER DEFAULT 0;
     v_create_sql VARCHAR;
     v_insert_sql VARCHAR;
     v_update_sql VARCHAR;
@@ -205,6 +223,23 @@ BEGIN
     v_target_schema := v_schema;
     v_source_fqn := 'SNOWFLAKE.' || v_schema || '.' || v_view;
     v_target_fqn := 'TEMPORAL_ARCHIVE.' || v_target_schema || '.' || v_target_table;
+    
+    -- Validate source view exists before attempting to load
+    SELECT COUNT(*) INTO :v_source_exists
+    FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS
+    WHERE TABLE_SCHEMA = :v_schema
+      AND TABLE_NAME = :v_view;
+    
+    IF (v_source_exists = 0) THEN
+        -- Source view does not exist - return warning without failing
+        RETURN OBJECT_CONSTRUCT(
+            'source', v_source_fqn,
+            'target', v_target_fqn,
+            'status', 'skipped',
+            'reason', 'Source view does not exist or is not accessible',
+            'timestamp', CURRENT_TIMESTAMP()::VARCHAR
+        );
+    END IF;
     
     -- Check if target table exists
     SELECT COUNT(*) INTO :v_table_exists
@@ -233,6 +268,21 @@ BEGIN
             FROM ' || v_source_fqn || ' src';
         
         EXECUTE IMMEDIATE v_create_sql;
+        
+        -- =====================================================================
+        -- INDEX RECOMMENDATIONS (for query performance on large tables):
+        -- Snowflake uses micro-partitions and automatic clustering, but you can
+        -- improve query performance with clustering keys on frequently filtered columns.
+        -- 
+        -- Recommended clustering keys for archive tables:
+        --   ALTER TABLE <table> CLUSTER BY ("_IS_CURRENT", "_VALID_FROM");
+        -- 
+        -- This helps queries that filter on current records (WHERE "_IS_CURRENT" = TRUE)
+        -- which is the most common query pattern.
+        -- 
+        -- For very large tables (>1TB), consider:
+        --   ALTER TABLE <table> CLUSTER BY ("_IS_CURRENT", "_LOADED_AT");
+        -- =====================================================================
         
         SELECT COUNT(*) INTO :v_rows_inserted FROM IDENTIFIER(:v_target_fqn);
         
@@ -306,6 +356,78 @@ EXCEPTION
             'error', SQLERRM,
             'timestamp', CURRENT_TIMESTAMP()::VARCHAR
         );
+END;
+$$;
+
+-- =============================================================================
+-- PROCEDURE: LOAD_VIEW_ARCHIVE_WITH_RETRY
+-- Wrapper with configurable retry logic for transient failures
+-- =============================================================================
+
+CREATE OR REPLACE PROCEDURE TEMPORAL_ARCHIVE.ARCHIVE.LOAD_VIEW_ARCHIVE_WITH_RETRY(
+    p_source_schema VARCHAR,
+    p_source_view VARCHAR,
+    p_max_retries INTEGER DEFAULT 3,
+    p_retry_delay_seconds INTEGER DEFAULT 5
+)
+RETURNS VARIANT
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS
+$$
+DECLARE
+    v_result VARIANT;
+    v_retry_count INTEGER DEFAULT 0;
+    v_success BOOLEAN DEFAULT FALSE;
+    v_last_error VARCHAR DEFAULT '';
+BEGIN
+    -- Retry loop with exponential backoff
+    WHILE (v_retry_count < p_max_retries AND NOT v_success) DO
+        BEGIN
+            -- Attempt the load
+            CALL TEMPORAL_ARCHIVE.ARCHIVE.LOAD_VIEW_ARCHIVE(
+                :p_source_schema,
+                :p_source_view
+            ) INTO v_result;
+            
+            -- Check if successful or skipped (not an error)
+            IF (v_result:status IN ('success', 'skipped')) THEN
+                v_success := TRUE;
+            ELSE
+                -- Error occurred - prepare for retry
+                v_last_error := v_result:error::VARCHAR;
+                v_retry_count := v_retry_count + 1;
+                
+                IF (v_retry_count < p_max_retries) THEN
+                    -- Wait before retry (exponential backoff: delay * 2^retry)
+                    CALL SYSTEM$WAIT(p_retry_delay_seconds * POWER(2, v_retry_count - 1));
+                END IF;
+            END IF;
+        EXCEPTION
+            WHEN OTHER THEN
+                v_last_error := SQLERRM;
+                v_retry_count := v_retry_count + 1;
+                
+                IF (v_retry_count < p_max_retries) THEN
+                    CALL SYSTEM$WAIT(p_retry_delay_seconds * POWER(2, v_retry_count - 1));
+                END IF;
+        END;
+    END WHILE;
+    
+    -- Add retry metadata to result
+    IF (v_success) THEN
+        RETURN OBJECT_INSERT(v_result, 'retries', v_retry_count);
+    ELSE
+        RETURN OBJECT_CONSTRUCT(
+            'source', 'SNOWFLAKE.' || p_source_schema || '.' || p_source_view,
+            'target', 'TEMPORAL_ARCHIVE.' || p_source_schema || '.' || p_source_view || '_ARCHIVE',
+            'status', 'error',
+            'error', v_last_error,
+            'retries', v_retry_count,
+            'max_retries_exceeded', TRUE,
+            'timestamp', CURRENT_TIMESTAMP()::VARCHAR
+        );
+    END IF;
 END;
 $$;
 

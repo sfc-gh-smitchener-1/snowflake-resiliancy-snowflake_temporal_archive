@@ -17,6 +17,42 @@
 import streamlit as st
 import pandas as pd
 from snowflake.snowpark.context import get_active_session
+from datetime import datetime, time as dt_time
+import logging
+
+# Optional pytz import - fallback to UTC if not available
+try:
+    import pytz
+    HAS_PYTZ = True
+except ImportError:
+    HAS_PYTZ = False
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# SECURITY HELPERS
+# ============================================================================
+
+import re
+
+def validate_identifier(identifier: str) -> bool:
+    """Validate that a string is a safe Snowflake identifier.
+    
+    Prevents SQL injection by ensuring identifiers only contain safe characters.
+    
+    Args:
+        identifier: The schema, table, or column name to validate.
+        
+    Returns:
+        True if the identifier is safe, False otherwise.
+    """
+    if not identifier:
+        return False
+    # Allow alphanumeric, underscores, and must start with letter or underscore
+    pattern = r'^[A-Za-z_][A-Za-z0-9_]*$'
+    return bool(re.match(pattern, identifier))
 
 # ============================================================================
 # PAGE CONFIGURATION
@@ -81,18 +117,57 @@ st.markdown("""
 # SESSION MANAGEMENT
 # ============================================================================
 
-@st.cache_resource
+# Session cache timeout in seconds (refresh session periodically)
+SESSION_CACHE_TTL = 300  # 5 minutes
+
+@st.cache_resource(ttl=SESSION_CACHE_TTL)
 def get_session():
-    """Get Snowflake session"""
-    return get_active_session()
+    """Get Snowflake session with automatic refresh on timeout.
+    
+    The session is cached for SESSION_CACHE_TTL seconds to balance
+    performance with session freshness. If the session expires or
+    becomes invalid, it will be automatically refreshed on next call.
+    
+    Returns:
+        Active Snowflake session.
+    """
+    try:
+        session = get_active_session()
+        # Validate session is working with a simple query
+        session.sql("SELECT 1").collect()
+        logger.info("Snowflake session initialized successfully")
+        return session
+    except Exception as e:
+        logger.error(f"Failed to initialize Snowflake session: {e}")
+        raise
+
+def validate_session() -> bool:
+    """Validate that the current session is still active.
+    
+    Returns:
+        True if session is valid, False otherwise.
+    """
+    try:
+        session = get_session()
+        session.sql("SELECT 1").collect()
+        return True
+    except Exception as e:
+        logger.warning(f"Session validation failed: {e}")
+        # Clear the cached session to force refresh
+        get_session.clear()
+        return False
 
 # ============================================================================
 # DATA FUNCTIONS
 # ============================================================================
 
 @st.cache_data(ttl=60)
-def get_archive_summary():
-    """Get summary of archived data"""
+def get_archive_summary() -> pd.DataFrame:
+    """Get summary of archived data.
+    
+    Returns:
+        DataFrame with archive summary by schema.
+    """
     session = get_session()
     try:
         df = session.sql("""
@@ -116,8 +191,12 @@ def get_archive_inventory():
         return pd.DataFrame()
 
 @st.cache_data(ttl=60)
-def get_semantic_views():
-    """Get available native Snowflake semantic views for Cortex Analyst"""
+def get_semantic_views() -> pd.DataFrame:
+    """Get available native Snowflake semantic views for Cortex Analyst.
+    
+    Returns:
+        DataFrame with semantic view information, or empty DataFrame if unavailable.
+    """
     session = get_session()
     try:
         # Get semantic views from INFORMATION_SCHEMA
@@ -131,7 +210,12 @@ def get_semantic_views():
             ORDER BY SEMANTIC_VIEW_NAME
         """).to_pandas()
         return df
-    except:
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "does not exist" in error_msg or "not found" in error_msg:
+            logger.warning("INFORMATION_SCHEMA.SEMANTIC_VIEWS not available - semantic views may not be created yet")
+        else:
+            logger.error(f"Error fetching semantic views: {e}")
         return pd.DataFrame()
 
 @st.cache_data(ttl=30)
@@ -146,8 +230,27 @@ def get_load_history():
     except:
         return pd.DataFrame()
 
-def sample_archive_table(schema: str, table_name: str, limit: int = 100):
-    """Sample data from an archive table"""
+def sample_archive_table(schema: str, table_name: str, limit: int = 100) -> pd.DataFrame | None:
+    """Sample data from an archive table.
+    
+    Args:
+        schema: The schema name (validated for safety).
+        table_name: The table name (validated for safety).
+        limit: Maximum rows to return.
+        
+    Returns:
+        DataFrame with sample data, or None if error/invalid input.
+    """
+    # Validate identifiers to prevent SQL injection
+    if not validate_identifier(schema):
+        logger.error(f"Invalid schema identifier: {schema}")
+        return None
+    if not validate_identifier(table_name):
+        logger.error(f"Invalid table identifier: {table_name}")
+        return None
+    if not isinstance(limit, int) or limit < 1 or limit > 10000:
+        limit = 100  # Default to safe value
+    
     session = get_session()
     try:
         df = session.sql(f"""
@@ -172,8 +275,16 @@ def execute_sql(sql: str):
 # CORTEX INTEGRATION
 # ============================================================================
 
-def call_cortex_analyst(prompt: str, semantic_view: str):
-    """Use Cortex Analyst with native Snowflake Semantic Views"""
+def call_cortex_analyst(prompt: str, semantic_view: str) -> tuple[dict | None, str | None]:
+    """Use Cortex Analyst with native Snowflake Semantic Views.
+    
+    Args:
+        prompt: Natural language question to ask.
+        semantic_view: Name of the semantic view to query against.
+        
+    Returns:
+        Tuple of (result_dict, None) on success or (None, error_message) on failure.
+    """
     session = get_session()
     
     try:
@@ -958,19 +1069,30 @@ def render_operations():
             """, unsafe_allow_html=True)
     
     # Next scheduled runs based on current time
-    from datetime import datetime, time as dt_time
-    import pytz
+    # Uses pytz if available, otherwise falls back to UTC-based calculation
     
     try:
-        et_tz = pytz.timezone('America/New_York')
-        now_et = datetime.now(et_tz)
+        if HAS_PYTZ:
+            et_tz = pytz.timezone('America/New_York')
+            now_et = datetime.now(et_tz)
+        else:
+            # Fallback: assume UTC-5 for ET (approximate)
+            from datetime import timezone, timedelta
+            et_offset = timezone(timedelta(hours=-5))
+            now_et = datetime.now(et_offset)
+            et_tz = et_offset
+        
         today_et = now_et.date()
         
         morning_time = datetime.combine(today_et, dt_time(6, 0))
         evening_time = datetime.combine(today_et, dt_time(18, 0))
         
-        morning_time = et_tz.localize(morning_time)
-        evening_time = et_tz.localize(evening_time)
+        if HAS_PYTZ:
+            morning_time = et_tz.localize(morning_time)
+            evening_time = et_tz.localize(evening_time)
+        else:
+            morning_time = morning_time.replace(tzinfo=et_tz)
+            evening_time = evening_time.replace(tzinfo=et_tz)
         
         # Calculate next morning run
         if now_et.time() >= dt_time(6, 0):

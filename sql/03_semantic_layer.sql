@@ -32,11 +32,11 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.COST_ANALYTICS
     
     TABLES (
         WAREHOUSE_METERING AS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY_ARCHIVE
-            PRIMARY KEY (START_TIME, WAREHOUSE_NAME)
+            PRIMARY KEY ("_ARCHIVE_ID")
             WITH SYNONYMS = ('warehouse usage', 'credit consumption', 'compute costs'),
             
         QUERY_HISTORY AS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE
-            PRIMARY KEY (QUERY_ID)
+            PRIMARY KEY ("_ARCHIVE_ID")
             WITH SYNONYMS = ('queries', 'sql executions', 'query runs')
     )
     
@@ -283,15 +283,15 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.GOVERNANCE_ANALYTICS
     
     TABLES (
         USERS AS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.USERS_ARCHIVE
-            PRIMARY KEY (USER_ID)
+            PRIMARY KEY ("_ARCHIVE_ID")
             WITH SYNONYMS = ('users', 'user accounts', 'principals'),
             
         ROLES AS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.ROLES_ARCHIVE
-            PRIMARY KEY (ROLE_ID)
+            PRIMARY KEY ("_ARCHIVE_ID")
             WITH SYNONYMS = ('roles', 'security roles'),
             
         GRANTS_TO_USERS AS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.GRANTS_TO_USERS_ARCHIVE
-            PRIMARY KEY (CREATED_ON, ROLE, GRANTEE_NAME)
+            PRIMARY KEY ("_ARCHIVE_ID")
             WITH SYNONYMS = ('user grants', 'role assignments')
     )
     
@@ -340,10 +340,10 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.GOVERNANCE_ANALYTICS
         TOTAL_USERS AS COUNT(DISTINCT USERS.USER_ID)
             WITH SYNONYMS = ('user count', 'number of users')
             COMMENT = 'Total number of users',
-        ACTIVE_USERS AS COUNT_IF(USERS.DISABLED = FALSE)
+        ACTIVE_USERS AS SUM(CASE WHEN USERS.DISABLED = FALSE THEN 1 ELSE 0 END)
             WITH SYNONYMS = ('enabled users', 'active count')
             COMMENT = 'Number of active (not disabled) users',
-        DISABLED_USERS AS COUNT_IF(USERS.DISABLED = TRUE)
+        DISABLED_USERS AS SUM(CASE WHEN USERS.DISABLED = TRUE THEN 1 ELSE 0 END)
             WITH SYNONYMS = ('inactive users', 'disabled count')
             COMMENT = 'Number of disabled users',
         TOTAL_ROLES AS COUNT(DISTINCT ROLES.ROLE_ID)
@@ -379,4 +379,4 @@ GRANT SELECT ON ALL SEMANTIC VIEWS IN SCHEMA TEMPORAL_ARCHIVE.SEMANTIC TO ROLE T
 
 SHOW SEMANTIC VIEWS IN SCHEMA TEMPORAL_ARCHIVE.SEMANTIC;
 
-SELECT '03_semantic_layer.sql completed - Native Semantic Views created for Cortex Analyst' AS STATUS;
+SELECT '03_semantic_layer.sql completed - Native Semantic Views created for Cort                       

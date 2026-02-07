@@ -118,16 +118,16 @@ GRANT ROLE TEMPORAL_ARCHIVE_WRITER TO ROLE TEMPORAL_ARCHIVE_ADMIN;
 
 
 -- =============================================================================
--- GRANT ALL ROLES TO USER STEVE (for demo purposes)
+-- GRANT ROLES TO USERS (Configure as needed)
+-- =============================================================================
+-- Uncomment and replace <YOUR_USERNAME> with the actual username(s) who need access.
+-- Example: GRANT ROLE DATA_ADMIN TO USER JOHN_DOE;
 -- =============================================================================
 
-GRANT ROLE DATA_ADMIN TO USER STEVE;
-
-GRANT ROLE TEMPORAL_ARCHIVE_ADMIN TO USER STEVE;
-
-GRANT ROLE TEMPORAL_ARCHIVE_WRITER TO USER STEVE;
-
-GRANT ROLE TEMPORAL_ARCHIVE_READER TO USER STEVE;
+-- GRANT ROLE DATA_ADMIN TO USER <YOUR_USERNAME>;
+-- GRANT ROLE TEMPORAL_ARCHIVE_ADMIN TO USER <YOUR_USERNAME>;
+-- GRANT ROLE TEMPORAL_ARCHIVE_WRITER TO USER <YOUR_USERNAME>;
+-- GRANT ROLE TEMPORAL_ARCHIVE_READER TO USER <YOUR_USERNAME>;
 
 
 -- =============================================================================
@@ -176,6 +176,25 @@ GRANT SELECT, INSERT, UPDATE ON FUTURE TABLES IN DATABASE TEMPORAL_ARCHIVE TO RO
 GRANT ALL ON ALL SCHEMAS IN DATABASE TEMPORAL_ARCHIVE TO ROLE TEMPORAL_ARCHIVE_ADMIN;
 
 GRANT ALL ON FUTURE SCHEMAS IN DATABASE TEMPORAL_ARCHIVE TO ROLE TEMPORAL_ARCHIVE_ADMIN;
+
+
+-- =============================================================================
+-- CREATE BACKUP POLICY (REQUIRES BUSINESS CRITICAL EDITION)
+-- =============================================================================
+-- WORM-compliant backup policy with 7-year retention
+-- Note: RETENTION LOCK requires Business Critical Edition or higher
+-- Reference: https://docs.snowflake.com/en/user-guide/backups
+-- =============================================================================
+
+CREATE BACKUP POLICY IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE.TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY
+    WITH RETENTION LOCK
+    SCHEDULE = '1440 MINUTE'
+    EXPIRE_AFTER_DAYS = 2555
+    COMMENT = 'WORM-compliant backup policy with 7-year retention for SEC 17a-4, HIPAA, FINRA compliance';
+
+-- Apply backup policy to database
+ALTER DATABASE TEMPORAL_ARCHIVE 
+    SET BACKUP_POLICY = TEMPORAL_ARCHIVE.ARCHIVE.TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY;
 
 
 -- =============================================================================
