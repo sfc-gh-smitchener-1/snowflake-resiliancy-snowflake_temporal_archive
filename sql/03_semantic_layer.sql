@@ -41,71 +41,71 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.COST_ANALYTICS
     )
     
     RELATIONSHIPS (
-        QUERY_HISTORY(WAREHOUSE_NAME) REFERENCES WAREHOUSE_METERING(WAREHOUSE_NAME)
+        QUERY_HISTORY (WAREHOUSE_NAME) REFERENCES WAREHOUSE_METERING (WAREHOUSE_NAME)
     )
     
     FACTS (
-        WAREHOUSE_METERING.CREDITS_USED AS credits_used
+        WAREHOUSE_METERING.credits_used AS CREDITS_USED
             WITH SYNONYMS ('credits', 'compute credits')
             COMMENT = 'Total credits consumed',
-        WAREHOUSE_METERING.CREDITS_USED_COMPUTE AS credits_compute
+        WAREHOUSE_METERING.credits_compute AS CREDITS_USED_COMPUTE
             WITH SYNONYMS ('compute credits')
             COMMENT = 'Credits for compute resources',
-        WAREHOUSE_METERING.CREDITS_USED_CLOUD_SERVICES AS credits_cloud
+        WAREHOUSE_METERING.credits_cloud AS CREDITS_USED_CLOUD_SERVICES
             WITH SYNONYMS ('cloud credits', 'service credits')
             COMMENT = 'Credits for cloud services',
-        QUERY_HISTORY.TOTAL_ELAPSED_TIME AS query_duration
+        QUERY_HISTORY.query_duration AS TOTAL_ELAPSED_TIME
             WITH SYNONYMS ('duration', 'elapsed time', 'execution time')
             COMMENT = 'Total query execution time in milliseconds',
-        QUERY_HISTORY.BYTES_SCANNED AS bytes_scanned
+        QUERY_HISTORY.bytes_scanned AS BYTES_SCANNED
             WITH SYNONYMS ('bytes read', 'data scanned')
             COMMENT = 'Bytes scanned during query execution',
-        QUERY_HISTORY.ROWS_PRODUCED AS rows_produced
+        QUERY_HISTORY.rows_produced AS ROWS_PRODUCED
             WITH SYNONYMS ('rows returned', 'result rows')
             COMMENT = 'Number of rows returned by the query'
     )
     
     DIMENSIONS (
-        WAREHOUSE_METERING.WAREHOUSE_NAME AS warehouse_name
+        WAREHOUSE_METERING.warehouse_name AS WAREHOUSE_NAME
             WITH SYNONYMS ('warehouse', 'compute cluster')
             COMMENT = 'Name of the virtual warehouse',
-        WAREHOUSE_METERING.START_TIME AS metering_start
+        WAREHOUSE_METERING.metering_start AS START_TIME
             WITH SYNONYMS ('metering start', 'usage start')
             COMMENT = 'Start time of the metering period',
-        WAREHOUSE_METERING.END_TIME AS metering_end
+        WAREHOUSE_METERING.metering_end AS END_TIME
             WITH SYNONYMS ('metering end', 'usage end')
             COMMENT = 'End time of the metering period',
-        QUERY_HISTORY.USER_NAME AS query_user
+        QUERY_HISTORY.query_user AS USER_NAME
             WITH SYNONYMS ('user', 'query user', 'executor')
             COMMENT = 'User who executed the query',
-        QUERY_HISTORY.ROLE_NAME AS query_role
+        QUERY_HISTORY.query_role AS ROLE_NAME
             WITH SYNONYMS ('role', 'execution role')
             COMMENT = 'Role used to execute the query',
-        QUERY_HISTORY.QUERY_TYPE AS query_type
+        QUERY_HISTORY.query_type AS QUERY_TYPE
             WITH SYNONYMS ('query type', 'statement type')
             COMMENT = 'Type of SQL statement',
-        QUERY_HISTORY.DATABASE_NAME AS database_name
+        QUERY_HISTORY.database_name AS DATABASE_NAME
             WITH SYNONYMS ('database', 'db')
             COMMENT = 'Database context for the query',
-        QUERY_HISTORY.WAREHOUSE_SIZE AS warehouse_size
+        QUERY_HISTORY.warehouse_size AS WAREHOUSE_SIZE
             WITH SYNONYMS ('size', 'warehouse size')
             COMMENT = 'Size of the warehouse used',
-        QUERY_HISTORY.EXECUTION_STATUS AS execution_status
+        QUERY_HISTORY.execution_status AS EXECUTION_STATUS
             WITH SYNONYMS ('status', 'result status')
             COMMENT = 'Query execution status'
     )
     
     METRICS (
-        WAREHOUSE_METERING.total_credits AS SUM(WAREHOUSE_METERING.CREDITS_USED)
+        WAREHOUSE_METERING.total_credits AS SUM(CREDITS_USED)
             WITH SYNONYMS ('total cost', 'total credits used')
             COMMENT = 'Sum of all credits consumed',
-        QUERY_HISTORY.total_queries AS COUNT(QUERY_HISTORY.QUERY_ID)
+        QUERY_HISTORY.total_queries AS COUNT(QUERY_ID)
             WITH SYNONYMS ('query count', 'number of queries')
             COMMENT = 'Total number of queries executed',
-        QUERY_HISTORY.avg_query_duration AS AVG(QUERY_HISTORY.TOTAL_ELAPSED_TIME)
+        QUERY_HISTORY.avg_query_duration AS AVG(TOTAL_ELAPSED_TIME)
             WITH SYNONYMS ('average duration', 'mean execution time')
             COMMENT = 'Average query execution time',
-        QUERY_HISTORY.total_bytes_scanned AS SUM(QUERY_HISTORY.BYTES_SCANNED)
+        QUERY_HISTORY.total_bytes_scanned AS SUM(BYTES_SCANNED)
             WITH SYNONYMS ('total data scanned')
             COMMENT = 'Total bytes scanned across all queries'
     )
@@ -133,58 +133,58 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.SECURITY_ANALYTICS
     )
     
     RELATIONSHIPS (
-        LOGIN_HISTORY(USER_NAME) REFERENCES USERS(NAME)
+        LOGIN_HISTORY (USER_NAME) REFERENCES USERS (NAME)
     )
     
     FACTS (
-        LOGIN_HISTORY.EVENT_ID AS event_id
+        LOGIN_HISTORY.event_id AS EVENT_ID
             COMMENT = 'Unique identifier for the login event'
     )
     
     DIMENSIONS (
-        LOGIN_HISTORY.USER_NAME AS login_user
+        LOGIN_HISTORY.login_user AS USER_NAME
             WITH SYNONYMS ('user', 'login user')
             COMMENT = 'Username attempting login',
-        LOGIN_HISTORY.EVENT_TIMESTAMP AS login_time
+        LOGIN_HISTORY.login_time AS EVENT_TIMESTAMP
             WITH SYNONYMS ('login time', 'event time')
             COMMENT = 'Timestamp of the login attempt',
-        LOGIN_HISTORY.CLIENT_IP AS client_ip
+        LOGIN_HISTORY.client_ip AS CLIENT_IP
             WITH SYNONYMS ('ip address', 'source ip')
             COMMENT = 'IP address of the client',
-        LOGIN_HISTORY.REPORTED_CLIENT_TYPE AS client_type
+        LOGIN_HISTORY.client_type AS REPORTED_CLIENT_TYPE
             WITH SYNONYMS ('client type', 'application')
             COMMENT = 'Type of client application used',
-        LOGIN_HISTORY.FIRST_AUTHENTICATION_FACTOR AS auth_factor
+        LOGIN_HISTORY.auth_factor AS FIRST_AUTHENTICATION_FACTOR
             WITH SYNONYMS ('auth factor', 'primary auth')
             COMMENT = 'Primary authentication method',
-        LOGIN_HISTORY.IS_SUCCESS AS login_success
+        LOGIN_HISTORY.login_success AS IS_SUCCESS
             WITH SYNONYMS ('success', 'login success')
             COMMENT = 'Whether login was successful',
-        LOGIN_HISTORY.ERROR_CODE AS error_code
+        LOGIN_HISTORY.error_code AS ERROR_CODE
             WITH SYNONYMS ('error', 'failure code')
             COMMENT = 'Error code if login failed',
-        USERS.EMAIL AS user_email
+        USERS.user_email AS EMAIL
             WITH SYNONYMS ('email address', 'user email')
             COMMENT = 'User email address',
-        USERS.DEFAULT_ROLE AS default_role
+        USERS.default_role AS DEFAULT_ROLE
             WITH SYNONYMS ('default role', 'primary role')
             COMMENT = 'Default role assigned to user',
-        USERS.DISABLED AS user_disabled
+        USERS.user_disabled AS DISABLED
             WITH SYNONYMS ('is disabled', 'account disabled')
             COMMENT = 'Whether user account is disabled',
-        USERS.HAS_MFA AS has_mfa
+        USERS.has_mfa AS HAS_MFA
             WITH SYNONYMS ('mfa enabled', 'multi-factor')
             COMMENT = 'Whether MFA is enabled for user'
     )
     
     METRICS (
-        LOGIN_HISTORY.total_logins AS COUNT(LOGIN_HISTORY.EVENT_ID)
+        LOGIN_HISTORY.total_logins AS COUNT(EVENT_ID)
             WITH SYNONYMS ('login count', 'total attempts')
             COMMENT = 'Total number of login attempts',
-        LOGIN_HISTORY.failed_logins AS SUM(CASE WHEN LOGIN_HISTORY.IS_SUCCESS = 'NO' THEN 1 ELSE 0 END)
+        LOGIN_HISTORY.failed_logins AS SUM(CASE WHEN IS_SUCCESS = 'NO' THEN 1 ELSE 0 END)
             WITH SYNONYMS ('failed count', 'bad logins', 'failures')
             COMMENT = 'Number of failed login attempts',
-        LOGIN_HISTORY.unique_users AS COUNT(DISTINCT LOGIN_HISTORY.USER_NAME)
+        LOGIN_HISTORY.unique_users AS COUNT(DISTINCT USER_NAME)
             WITH SYNONYMS ('distinct users', 'user count')
             COMMENT = 'Number of unique users attempting login'
     )
@@ -212,39 +212,39 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.STORAGE_ANALYTICS
     )
     
     FACTS (
-        STORAGE_USAGE.AVERAGE_DATABASE_BYTES AS database_bytes
+        STORAGE_USAGE.database_bytes AS AVERAGE_DATABASE_BYTES
             WITH SYNONYMS ('database bytes', 'db storage bytes')
             COMMENT = 'Average database storage in bytes',
-        STORAGE_USAGE.AVERAGE_STAGE_BYTES AS stage_bytes
+        STORAGE_USAGE.stage_bytes AS AVERAGE_STAGE_BYTES
             WITH SYNONYMS ('stage bytes', 'staging storage')
             COMMENT = 'Average stage storage in bytes',
-        STORAGE_USAGE.AVERAGE_FAILSAFE_BYTES AS failsafe_bytes
+        STORAGE_USAGE.failsafe_bytes AS AVERAGE_FAILSAFE_BYTES
             WITH SYNONYMS ('failsafe bytes', 'backup storage')
             COMMENT = 'Average failsafe storage in bytes',
-        DATABASE_STORAGE.AVERAGE_DATABASE_BYTES AS db_bytes
+        DATABASE_STORAGE.db_bytes AS AVERAGE_DATABASE_BYTES
             WITH SYNONYMS ('database size')
             COMMENT = 'Database size in bytes',
-        DATABASE_STORAGE.AVERAGE_FAILSAFE_BYTES AS db_failsafe_bytes
+        DATABASE_STORAGE.db_failsafe_bytes AS AVERAGE_FAILSAFE_BYTES
             COMMENT = 'Database failsafe storage in bytes'
     )
     
     DIMENSIONS (
-        STORAGE_USAGE.USAGE_DATE AS storage_date
+        STORAGE_USAGE.storage_date AS USAGE_DATE
             WITH SYNONYMS ('date', 'storage date')
             COMMENT = 'Date of storage measurement',
-        DATABASE_STORAGE.DATABASE_NAME AS database_name
+        DATABASE_STORAGE.database_name AS DATABASE_NAME
             WITH SYNONYMS ('database', 'db name')
             COMMENT = 'Name of the database'
     )
     
     METRICS (
-        STORAGE_USAGE.total_storage_bytes AS SUM(STORAGE_USAGE.AVERAGE_DATABASE_BYTES)
+        STORAGE_USAGE.total_storage_bytes AS SUM(AVERAGE_DATABASE_BYTES)
             WITH SYNONYMS ('total storage', 'total bytes')
             COMMENT = 'Total storage across all dates',
-        STORAGE_USAGE.total_storage_tb AS SUM(STORAGE_USAGE.AVERAGE_DATABASE_BYTES) / POWER(1024, 4)
+        STORAGE_USAGE.total_storage_tb AS SUM(AVERAGE_DATABASE_BYTES) / POWER(1024, 4)
             WITH SYNONYMS ('storage terabytes', 'tb used')
             COMMENT = 'Total storage in terabytes',
-        STORAGE_USAGE.avg_daily_storage AS AVG(STORAGE_USAGE.AVERAGE_DATABASE_BYTES)
+        STORAGE_USAGE.avg_daily_storage AS AVG(AVERAGE_DATABASE_BYTES)
             WITH SYNONYMS ('average storage')
             COMMENT = 'Average daily storage usage'
     )
@@ -276,57 +276,57 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.GOVERNANCE_ANALYTICS
     )
     
     RELATIONSHIPS (
-        GRANTS_TO_USERS(GRANTEE_NAME) REFERENCES USERS(NAME),
-        GRANTS_TO_USERS(ROLE) REFERENCES ROLES(NAME)
+        GRANTS_TO_USERS (GRANTEE_NAME) REFERENCES USERS (NAME),
+        GRANTS_TO_USERS (ROLE) REFERENCES ROLES (NAME)
     )
     
     DIMENSIONS (
-        USERS.NAME AS user_name
+        USERS.user_name AS NAME
             WITH SYNONYMS ('user', 'username')
             COMMENT = 'User account name',
-        USERS.LOGIN_NAME AS login_name
+        USERS.login_name AS LOGIN_NAME
             WITH SYNONYMS ('login', 'login id')
             COMMENT = 'Login identifier',
-        USERS.EMAIL AS user_email
+        USERS.user_email AS EMAIL
             WITH SYNONYMS ('email', 'user email')
             COMMENT = 'User email address',
-        USERS.DEFAULT_WAREHOUSE AS default_warehouse
+        USERS.default_warehouse AS DEFAULT_WAREHOUSE
             WITH SYNONYMS ('warehouse', 'default compute')
             COMMENT = 'Default warehouse for user',
-        USERS.DEFAULT_ROLE AS default_role
+        USERS.default_role AS DEFAULT_ROLE
             WITH SYNONYMS ('default role', 'primary role')
             COMMENT = 'Default role for user',
-        USERS.CREATED_ON AS user_created
+        USERS.user_created AS CREATED_ON
             WITH SYNONYMS ('user created', 'account created')
             COMMENT = 'When user was created',
-        USERS.DISABLED AS user_disabled
+        USERS.user_disabled AS DISABLED
             WITH SYNONYMS ('is disabled', 'inactive')
             COMMENT = 'Whether user is disabled',
-        USERS.HAS_MFA AS has_mfa
+        USERS.has_mfa AS HAS_MFA
             WITH SYNONYMS ('mfa', 'multi-factor auth')
             COMMENT = 'Whether MFA is enabled',
-        ROLES.NAME AS role_name
+        ROLES.role_name AS NAME
             WITH SYNONYMS ('role', 'security role')
             COMMENT = 'Role name',
-        ROLES.OWNER AS role_owner
+        ROLES.role_owner AS OWNER
             WITH SYNONYMS ('role owner', 'owner')
             COMMENT = 'Owner of the role',
-        ROLES.CREATED_ON AS role_created
+        ROLES.role_created AS CREATED_ON
             WITH SYNONYMS ('role created')
             COMMENT = 'When role was created'
     )
     
     METRICS (
-        USERS.total_users AS COUNT(DISTINCT USERS.USER_ID)
+        USERS.total_users AS COUNT(DISTINCT USER_ID)
             WITH SYNONYMS ('user count', 'number of users')
             COMMENT = 'Total number of users',
-        USERS.active_users AS SUM(CASE WHEN USERS.DISABLED = FALSE THEN 1 ELSE 0 END)
+        USERS.active_users AS SUM(CASE WHEN DISABLED = FALSE THEN 1 ELSE 0 END)
             WITH SYNONYMS ('enabled users', 'active count')
             COMMENT = 'Number of active (not disabled) users',
-        USERS.disabled_users AS SUM(CASE WHEN USERS.DISABLED = TRUE THEN 1 ELSE 0 END)
+        USERS.disabled_users AS SUM(CASE WHEN DISABLED = TRUE THEN 1 ELSE 0 END)
             WITH SYNONYMS ('inactive users', 'disabled count')
             COMMENT = 'Number of disabled users',
-        ROLES.total_roles AS COUNT(DISTINCT ROLES.ROLE_ID)
+        ROLES.total_roles AS COUNT(DISTINCT ROLE_ID)
             WITH SYNONYMS ('role count', 'number of roles')
             COMMENT = 'Total number of roles'
     )
