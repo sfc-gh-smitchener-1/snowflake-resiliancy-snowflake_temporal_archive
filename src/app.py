@@ -276,12 +276,128 @@ def execute_sql(sql: str):
 # CORTEX INTEGRATION
 # ============================================================================
 
+def get_semantic_context(semantic_view: str) -> str:
+    """Get semantic context for a semantic view to provide to Cortex.
+    
+    Args:
+        semantic_view: Name of the semantic view.
+        
+    Returns:
+        String with table and column context for the semantic view.
+    """
+    # Define the context for each semantic view based on underlying tables
+    contexts = {
+        'COST_ANALYTICS': """
+You are analyzing Snowflake cost data. The available tables are:
+
+1. TEMPORAL_ARCHIVE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY_ARCHIVE
+   - WAREHOUSE_NAME: Name of the warehouse
+   - CREDITS_USED: Total credits consumed
+   - CREDITS_USED_COMPUTE: Compute credits
+   - CREDITS_USED_CLOUD_SERVICES: Cloud service credits
+   - START_TIME, END_TIME: Time range for metering
+   - "_IS_CURRENT": TRUE for current records (always filter on this)
+
+2. TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE
+   - QUERY_ID: Unique query identifier
+   - USER_NAME: User who ran the query
+   - ROLE_NAME: Role used
+   - WAREHOUSE_NAME: Warehouse used
+   - DATABASE_NAME, SCHEMA_NAME: Context
+   - QUERY_TYPE: Type of statement (SELECT, INSERT, etc.)
+   - EXECUTION_STATUS: SUCCESS, FAIL, etc.
+   - TOTAL_ELAPSED_TIME: Duration in milliseconds
+   - BYTES_SCANNED, ROWS_PRODUCED: Query metrics
+   - START_TIME: When query started
+   - "_IS_CURRENT": TRUE for current records (always filter on this)
+
+IMPORTANT: Always include WHERE "_IS_CURRENT" = TRUE in your queries.
+""",
+        'SECURITY_ANALYTICS': """
+You are analyzing Snowflake security data. The available tables are:
+
+1. TEMPORAL_ARCHIVE.ACCOUNT_USAGE.LOGIN_HISTORY_ARCHIVE
+   - EVENT_TIMESTAMP: When login occurred
+   - USER_NAME: User attempting login
+   - CLIENT_IP: IP address
+   - REPORTED_CLIENT_TYPE: Client type (SNOWFLAKE_UI, JDBC, etc.)
+   - FIRST_AUTHENTICATION_FACTOR: Auth method
+   - IS_SUCCESS: 'YES' or 'NO'
+   - ERROR_CODE, ERROR_MESSAGE: For failed logins
+   - "_IS_CURRENT": TRUE for current records
+
+2. TEMPORAL_ARCHIVE.ACCOUNT_USAGE.USERS_ARCHIVE
+   - NAME: Username
+   - EMAIL: Email address
+   - DEFAULT_ROLE: Default role
+   - DISABLED: Account status
+   - HAS_MFA: MFA enabled flag
+   - LAST_SUCCESS_LOGIN: Last successful login
+   - "_IS_CURRENT": TRUE for current records
+
+IMPORTANT: Always include WHERE "_IS_CURRENT" = TRUE in your queries.
+""",
+        'STORAGE_ANALYTICS': """
+You are analyzing Snowflake storage data. The available tables are:
+
+1. TEMPORAL_ARCHIVE.ACCOUNT_USAGE.STORAGE_USAGE_ARCHIVE
+   - USAGE_DATE: Date of measurement
+   - STORAGE_BYTES: Total storage in bytes
+   - STAGE_BYTES: Stage storage
+   - FAILSAFE_BYTES: Failsafe storage
+   - "_IS_CURRENT": TRUE for current records
+
+2. TEMPORAL_ARCHIVE.ACCOUNT_USAGE.DATABASE_STORAGE_USAGE_HISTORY_ARCHIVE
+   - USAGE_DATE: Date
+   - DATABASE_NAME: Database name
+   - AVERAGE_DATABASE_BYTES: Avg storage
+   - "_IS_CURRENT": TRUE for current records
+
+3. TEMPORAL_ARCHIVE.ACCOUNT_USAGE.TABLE_STORAGE_METRICS_ARCHIVE
+   - TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME: Table identifiers
+   - ACTIVE_BYTES, TIME_TRAVEL_BYTES, FAILSAFE_BYTES: Storage breakdown
+   - "_IS_CURRENT": TRUE for current records
+
+IMPORTANT: Always include WHERE "_IS_CURRENT" = TRUE in your queries.
+""",
+        'GOVERNANCE_ANALYTICS': """
+You are analyzing Snowflake governance data. The available tables are:
+
+1. TEMPORAL_ARCHIVE.ACCOUNT_USAGE.USERS_ARCHIVE
+   - NAME: Username
+   - LOGIN_NAME: Login identifier
+   - EMAIL: Email
+   - DEFAULT_ROLE: Default role
+   - DISABLED: Is disabled
+   - CREATED_ON: When created
+   - "_IS_CURRENT": TRUE for current records
+
+2. TEMPORAL_ARCHIVE.ACCOUNT_USAGE.ROLES_ARCHIVE
+   - NAME: Role name
+   - COMMENT: Description
+   - OWNER: Owner role
+   - CREATED_ON: When created
+   - "_IS_CURRENT": TRUE for current records
+
+3. TEMPORAL_ARCHIVE.ACCOUNT_USAGE.GRANTS_TO_ROLES_ARCHIVE
+   - GRANTEE_NAME: Role receiving grant
+   - PRIVILEGE: Privilege granted
+   - TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME: Object granted on
+   - GRANTED_BY: Who granted
+   - "_IS_CURRENT": TRUE for current records
+
+IMPORTANT: Always include WHERE "_IS_CURRENT" = TRUE in your queries.
+"""
+    }
+    return contexts.get(semantic_view, contexts['COST_ANALYTICS'])
+
+
 def call_cortex_analyst(prompt: str, semantic_view: str) -> tuple[dict | None, str | None]:
-    """Use Cortex Analyst with native Snowflake Semantic Views.
+    """Use Cortex COMPLETE to generate SQL for the Temporal Archive.
     
     Args:
         prompt: Natural language question to ask.
-        semantic_view: Name of the semantic view to query against.
+        semantic_view: Name of the semantic view (determines context).
         
     Returns:
         Tuple of (result_dict, None) on success or (None, error_message) on failure.
@@ -289,61 +405,61 @@ def call_cortex_analyst(prompt: str, semantic_view: str) -> tuple[dict | None, s
     session = get_session()
     
     try:
-        # The semantic view is in TEMPORAL_ARCHIVE.SEMANTIC schema
-        semantic_view_fqn = f"TEMPORAL_ARCHIVE.SEMANTIC.{semantic_view}"
+        # Get the context for this semantic view
+        context = get_semantic_context(semantic_view)
         
-        # Escape the prompt
-        escaped_prompt = prompt.replace("'", "''")
+        # Build the prompt for Cortex
+        full_prompt = f"""{context}
+
+Based on the above schema, generate a SQL query to answer:
+{prompt}
+
+Return ONLY the SQL query, no explanation. The query must:
+1. Use the full table paths (TEMPORAL_ARCHIVE.ACCOUNT_USAGE.*)
+2. Include WHERE "_IS_CURRENT" = TRUE
+3. Be valid Snowflake SQL
+"""
         
-        # Call Cortex Analyst with the semantic view
-        # CORTEX.ANALYST generates SQL using the semantic model
+        # Escape quotes in the prompt
+        escaped_prompt = full_prompt.replace("'", "''")
+        
+        # Call Cortex COMPLETE
         result = session.sql(f"""
-            SELECT SNOWFLAKE.CORTEX.ANALYST(
-                '{semantic_view_fqn}',
+            SELECT SNOWFLAKE.CORTEX.COMPLETE(
+                'llama3.1-70b',
                 '{escaped_prompt}'
             ) AS response
         """).to_pandas()
         
         if not result.empty and result['RESPONSE'].iloc[0]:
-            response = result['RESPONSE'].iloc[0]
+            response = str(result['RESPONSE'].iloc[0]).strip()
             
-            # Parse the response - Cortex Analyst returns structured output
-            if isinstance(response, dict):
-                sql = response.get('sql', '')
-                explanation = response.get('explanation', '')
-                return {
-                    "sql": sql,
-                    "explanation": explanation,
-                    "semantic_view": semantic_view_fqn
-                }, None
-            else:
-                # If response is string, try to extract SQL
-                sql = str(response).strip()
-                if '```' in sql:
-                    parts = sql.split('```')
-                    for part in parts:
-                        if 'SELECT' in part.upper():
-                            sql = part.strip()
-                            if sql.lower().startswith('sql'):
-                                sql = sql[3:].strip()
-                            break
-                
-                return {
-                    "sql": sql,
-                    "semantic_view": semantic_view_fqn
-                }, None
+            # Extract SQL from response (handle markdown code blocks)
+            sql = response
+            if '```' in sql:
+                parts = sql.split('```')
+                for part in parts:
+                    part = part.strip()
+                    if part.lower().startswith('sql'):
+                        part = part[3:].strip()
+                    if 'SELECT' in part.upper() or 'WITH' in part.upper():
+                        sql = part.strip()
+                        break
+            
+            # Clean up any remaining markdown or quotes
+            sql = sql.strip('`').strip('"').strip()
+            
+            return {
+                "sql": sql,
+                "semantic_view": semantic_view,
+                "model": "llama3.1-70b"
+            }, None
         else:
-            return None, "Cortex Analyst returned no response"
+            return None, "Cortex returned no response"
             
     except Exception as e:
         error_msg = str(e)
-        # Provide helpful error messages
-        if "does not exist" in error_msg.lower():
-            return None, f"Semantic view '{semantic_view}' not found. Run 03_semantic_layer.sql first."
-        elif "not authorized" in error_msg.lower():
-            return None, "Not authorized to use Cortex Analyst. Check role permissions."
-        else:
-            return None, f"Cortex Analyst error: {error_msg}"
+        return None, f"Cortex error: {error_msg}"
 
 # ============================================================================
 # SIDEBAR
