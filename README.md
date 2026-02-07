@@ -122,7 +122,6 @@ SNOWFLAKE.ACCOUNT_USAGE (186 views, 1-year retention)
 | [Skill Deployment](docs/skill-deployment.md) | How to deploy using Cortex Code skill |
 | [Architecture](docs/architecture.md) | Technical design and data flow |
 | [SCD Design](docs/scd-design.md) | SCD Type 2 implementation details |
-| [Multi-Account Patterns](docs/snowflake_account_architecture_patterns.md) | Hub-and-spoke deployment |
 
 ## Requirements
 
