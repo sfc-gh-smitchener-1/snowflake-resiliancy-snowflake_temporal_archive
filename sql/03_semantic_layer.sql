@@ -1049,6 +1049,390 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.COST_ANALYTICS
 
 
 -- =============================================================================
+-- SEMANTIC VIEW: QUERY_PERFORMANCE_ANALYTICS
+-- Detailed query analysis with table-level access patterns and performance alerting
+-- Joins QUERY_HISTORY with ACCESS_HISTORY for complete user/table attribution
+-- =============================================================================
+
+CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.QUERY_PERFORMANCE_ANALYTICS
+    
+    TABLES (
+        QUERY_HISTORY AS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE
+            PRIMARY KEY (QUERY_ID)
+            WITH SYNONYMS ('queries', 'sql executions', 'query runs', 'query performance', 'slow queries'),
+            
+        ACCESS_HISTORY AS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.ACCESS_HISTORY_ARCHIVE
+            PRIMARY KEY (QUERY_ID)
+            WITH SYNONYMS ('table access', 'data access', 'object access', 'who accessed what', 'data lineage')
+    )
+    
+    RELATIONSHIPS (
+        ACCESS_HISTORY (QUERY_ID) REFERENCES QUERY_HISTORY (QUERY_ID)
+    )
+    
+    FACTS (
+        -- Duration Metrics (all in milliseconds)
+        QUERY_HISTORY.total_elapsed_time AS QUERY_HISTORY.TOTAL_ELAPSED_TIME
+            WITH SYNONYMS ('duration', 'elapsed time', 'total time', 'runtime')
+            COMMENT = 'Total query execution time in milliseconds',
+        QUERY_HISTORY.execution_time AS QUERY_HISTORY.EXECUTION_TIME
+            WITH SYNONYMS ('exec time', 'processing time')
+            COMMENT = 'Time spent executing the query in milliseconds',
+        QUERY_HISTORY.compilation_time AS QUERY_HISTORY.COMPILATION_TIME
+            WITH SYNONYMS ('compile time', 'parse time')
+            COMMENT = 'Time spent compiling/parsing the query in milliseconds',
+        QUERY_HISTORY.queued_provisioning_time AS QUERY_HISTORY.QUEUED_PROVISIONING_TIME
+            WITH SYNONYMS ('provisioning wait', 'startup time')
+            COMMENT = 'Time waiting for warehouse to provision',
+        QUERY_HISTORY.queued_overload_time AS QUERY_HISTORY.QUEUED_OVERLOAD_TIME
+            WITH SYNONYMS ('queue time', 'overload wait', 'contention time')
+            COMMENT = 'Time waiting due to warehouse overload - indicates capacity issues',
+        QUERY_HISTORY.queued_repair_time AS QUERY_HISTORY.QUEUED_REPAIR_TIME
+            WITH SYNONYMS ('repair wait')
+            COMMENT = 'Time waiting for warehouse repair',
+        QUERY_HISTORY.transaction_blocked_time AS QUERY_HISTORY.TRANSACTION_BLOCKED_TIME
+            WITH SYNONYMS ('blocked time', 'lock wait')
+            COMMENT = 'Time blocked by other transactions',
+            
+        -- I/O Metrics
+        QUERY_HISTORY.bytes_scanned AS QUERY_HISTORY.BYTES_SCANNED
+            WITH SYNONYMS ('bytes read', 'data scanned', 'scan size')
+            COMMENT = 'Bytes scanned from storage',
+        QUERY_HISTORY.bytes_written AS QUERY_HISTORY.BYTES_WRITTEN
+            WITH SYNONYMS ('bytes output', 'data written')
+            COMMENT = 'Bytes written to storage',
+        QUERY_HISTORY.bytes_written_to_result AS QUERY_HISTORY.BYTES_WRITTEN_TO_RESULT
+            WITH SYNONYMS ('result size')
+            COMMENT = 'Bytes written to query result',
+        QUERY_HISTORY.rows_produced AS QUERY_HISTORY.ROWS_PRODUCED
+            WITH SYNONYMS ('rows returned', 'result rows', 'output rows')
+            COMMENT = 'Number of rows returned by the query',
+        QUERY_HISTORY.rows_inserted AS QUERY_HISTORY.ROWS_INSERTED
+            WITH SYNONYMS ('inserts')
+            COMMENT = 'Number of rows inserted',
+        QUERY_HISTORY.rows_updated AS QUERY_HISTORY.ROWS_UPDATED
+            WITH SYNONYMS ('updates')
+            COMMENT = 'Number of rows updated',
+        QUERY_HISTORY.rows_deleted AS QUERY_HISTORY.ROWS_DELETED
+            WITH SYNONYMS ('deletes')
+            COMMENT = 'Number of rows deleted',
+            
+        -- Partition Pruning Metrics (critical for performance)
+        QUERY_HISTORY.partitions_scanned AS QUERY_HISTORY.PARTITIONS_SCANNED
+            WITH SYNONYMS ('partitions read', 'scanned partitions')
+            COMMENT = 'Number of partitions scanned - lower is better',
+        QUERY_HISTORY.partitions_total AS QUERY_HISTORY.PARTITIONS_TOTAL
+            WITH SYNONYMS ('total partitions', 'partition count')
+            COMMENT = 'Total partitions in scanned tables',
+            
+        -- Cache Metrics
+        QUERY_HISTORY.cache_hit_ratio AS QUERY_HISTORY.PERCENTAGE_SCANNED_FROM_CACHE
+            WITH SYNONYMS ('cache hit', 'cache percentage', 'cache ratio')
+            COMMENT = 'Percentage of data read from cache (0-1, higher is better)',
+            
+        -- Spill Metrics (indicates memory pressure)
+        QUERY_HISTORY.bytes_spilled_local AS QUERY_HISTORY.BYTES_SPILLED_TO_LOCAL_STORAGE
+            WITH SYNONYMS ('local spill', 'local spillage')
+            COMMENT = 'Bytes spilled to local SSD - indicates memory pressure',
+        QUERY_HISTORY.bytes_spilled_remote AS QUERY_HISTORY.BYTES_SPILLED_TO_REMOTE_STORAGE
+            WITH SYNONYMS ('remote spill', 'remote spillage')
+            COMMENT = 'Bytes spilled to remote storage - severe memory pressure, consider larger warehouse',
+            
+        -- Network Metrics
+        QUERY_HISTORY.bytes_sent_over_network AS QUERY_HISTORY.BYTES_SENT_OVER_THE_NETWORK
+            WITH SYNONYMS ('network bytes', 'data transfer')
+            COMMENT = 'Bytes sent over network',
+            
+        -- Cost Metrics
+        QUERY_HISTORY.credits_used_cloud_services AS QUERY_HISTORY.CREDITS_USED_CLOUD_SERVICES
+            WITH SYNONYMS ('cloud credits', 'service credits', 'query cost')
+            COMMENT = 'Cloud service credits consumed by this query',
+            
+        -- Load Metrics
+        QUERY_HISTORY.query_load_percent AS QUERY_HISTORY.QUERY_LOAD_PERCENT
+            WITH SYNONYMS ('load percent', 'warehouse load')
+            COMMENT = 'Percentage of warehouse resources used by query',
+            
+        -- Query Acceleration Metrics
+        QUERY_HISTORY.acceleration_bytes_scanned AS QUERY_HISTORY.QUERY_ACCELERATION_BYTES_SCANNED
+            WITH SYNONYMS ('accelerated bytes')
+            COMMENT = 'Bytes scanned via query acceleration service',
+        QUERY_HISTORY.acceleration_partitions_scanned AS QUERY_HISTORY.QUERY_ACCELERATION_PARTITIONS_SCANNED
+            WITH SYNONYMS ('accelerated partitions')
+            COMMENT = 'Partitions scanned via query acceleration',
+            
+        -- External Function Metrics
+        QUERY_HISTORY.external_function_invocations AS QUERY_HISTORY.EXTERNAL_FUNCTION_TOTAL_INVOCATIONS
+            WITH SYNONYMS ('external calls', 'function calls')
+            COMMENT = 'Number of external function invocations',
+        QUERY_HISTORY.external_function_sent_rows AS QUERY_HISTORY.EXTERNAL_FUNCTION_TOTAL_SENT_ROWS
+            WITH SYNONYMS ('rows sent external')
+            COMMENT = 'Rows sent to external functions',
+        QUERY_HISTORY.external_function_received_rows AS QUERY_HISTORY.EXTERNAL_FUNCTION_TOTAL_RECEIVED_ROWS
+            WITH SYNONYMS ('rows received external')
+            COMMENT = 'Rows received from external functions'
+    )
+    
+    DIMENSIONS (
+        -- Query Identifiers
+        QUERY_HISTORY.query_id AS QUERY_HISTORY.QUERY_ID
+            WITH SYNONYMS ('query identifier', 'id')
+            COMMENT = 'Unique query identifier',
+        QUERY_HISTORY.query_hash AS QUERY_HISTORY.QUERY_HASH
+            WITH SYNONYMS ('sql hash', 'query fingerprint')
+            COMMENT = 'Hash of the query text for identifying similar queries',
+        QUERY_HISTORY.query_parameterized_hash AS QUERY_HISTORY.QUERY_PARAMETERIZED_HASH
+            WITH SYNONYMS ('parameterized hash', 'normalized hash')
+            COMMENT = 'Hash ignoring literal values - groups queries with different parameters',
+            
+        -- User Context
+        QUERY_HISTORY.user_name AS QUERY_HISTORY.USER_NAME
+            WITH SYNONYMS ('user', 'who ran', 'executor', 'query user')
+            COMMENT = 'User who executed the query',
+        QUERY_HISTORY.role_name AS QUERY_HISTORY.ROLE_NAME
+            WITH SYNONYMS ('role', 'execution role')
+            COMMENT = 'Role used to execute the query',
+        QUERY_HISTORY.role_type AS QUERY_HISTORY.ROLE_TYPE
+            WITH SYNONYMS ('role type')
+            COMMENT = 'Type of role: ROLE or DATABASE_ROLE',
+        QUERY_HISTORY.user_type AS QUERY_HISTORY.USER_TYPE
+            WITH SYNONYMS ('user type', 'principal type')
+            COMMENT = 'Type of user: USER, SERVICE, APPLICATION',
+            
+        -- Warehouse Context
+        QUERY_HISTORY.warehouse_name AS QUERY_HISTORY.WAREHOUSE_NAME
+            WITH SYNONYMS ('warehouse', 'compute', 'wh')
+            COMMENT = 'Virtual warehouse used for the query',
+        QUERY_HISTORY.warehouse_size AS QUERY_HISTORY.WAREHOUSE_SIZE
+            WITH SYNONYMS ('size', 'wh size')
+            COMMENT = 'Size of the warehouse: X-Small, Small, Medium, Large, X-Large, etc.',
+        QUERY_HISTORY.warehouse_type AS QUERY_HISTORY.WAREHOUSE_TYPE
+            WITH SYNONYMS ('wh type')
+            COMMENT = 'Type: STANDARD or SNOWPARK-OPTIMIZED',
+        QUERY_HISTORY.cluster_number AS QUERY_HISTORY.CLUSTER_NUMBER
+            WITH SYNONYMS ('cluster', 'multi-cluster')
+            COMMENT = 'Cluster number for multi-cluster warehouses',
+            
+        -- Database/Schema Context
+        QUERY_HISTORY.database_name AS QUERY_HISTORY.DATABASE_NAME
+            WITH SYNONYMS ('database', 'db')
+            COMMENT = 'Database context for the query',
+        QUERY_HISTORY.schema_name AS QUERY_HISTORY.SCHEMA_NAME
+            WITH SYNONYMS ('schema')
+            COMMENT = 'Schema context for the query',
+            
+        -- Query Metadata
+        QUERY_HISTORY.query_type AS QUERY_HISTORY.QUERY_TYPE
+            WITH SYNONYMS ('statement type', 'sql type', 'operation')
+            COMMENT = 'Type of SQL: SELECT, INSERT, UPDATE, DELETE, CREATE, etc.',
+        QUERY_HISTORY.query_tag AS QUERY_HISTORY.QUERY_TAG
+            WITH SYNONYMS ('tag', 'label', 'cost center')
+            COMMENT = 'User-defined query tag for cost attribution and tracking',
+        QUERY_HISTORY.execution_status AS QUERY_HISTORY.EXECUTION_STATUS
+            WITH SYNONYMS ('status', 'result', 'outcome')
+            COMMENT = 'Query status: SUCCESS, FAIL, INCIDENT',
+        QUERY_HISTORY.error_code AS QUERY_HISTORY.ERROR_CODE
+            WITH SYNONYMS ('error', 'error number')
+            COMMENT = 'Error code if query failed',
+        QUERY_HISTORY.error_message AS QUERY_HISTORY.ERROR_MESSAGE
+            WITH SYNONYMS ('error text', 'failure reason')
+            COMMENT = 'Error message if query failed',
+            
+        -- Time Dimensions
+        QUERY_HISTORY.start_time AS QUERY_HISTORY.START_TIME
+            WITH SYNONYMS ('query start', 'started', 'begin time')
+            COMMENT = 'When the query started',
+        QUERY_HISTORY.end_time AS QUERY_HISTORY.END_TIME
+            WITH SYNONYMS ('query end', 'finished', 'completed')
+            COMMENT = 'When the query ended',
+            
+        -- Client Context
+        QUERY_HISTORY.is_client_generated AS QUERY_HISTORY.IS_CLIENT_GENERATED_STATEMENT
+            WITH SYNONYMS ('client generated', 'auto generated')
+            COMMENT = 'Whether query was generated by a client driver',
+        QUERY_HISTORY.session_id AS QUERY_HISTORY.SESSION_ID
+            WITH SYNONYMS ('session')
+            COMMENT = 'Session ID for the query',
+        QUERY_HISTORY.release_version AS QUERY_HISTORY.RELEASE_VERSION
+            WITH SYNONYMS ('snowflake version', 'release')
+            COMMENT = 'Snowflake release version',
+            
+        -- Retry Information
+        QUERY_HISTORY.query_retry_time AS QUERY_HISTORY.QUERY_RETRY_TIME
+            WITH SYNONYMS ('retry time')
+            COMMENT = 'Time spent in query retries',
+        QUERY_HISTORY.query_retry_cause AS QUERY_HISTORY.QUERY_RETRY_CAUSE
+            WITH SYNONYMS ('retry reason')
+            COMMENT = 'Reason for query retry',
+            
+        -- Access History Dimensions (for table-level attribution)
+        ACCESS_HISTORY.query_start_time AS ACCESS_HISTORY.QUERY_START_TIME
+            WITH SYNONYMS ('access time')
+            COMMENT = 'When the data access occurred',
+        ACCESS_HISTORY.access_user AS ACCESS_HISTORY.USER_NAME
+            WITH SYNONYMS ('accessing user')
+            COMMENT = 'User who accessed the data',
+        ACCESS_HISTORY.direct_objects_accessed AS ACCESS_HISTORY.DIRECT_OBJECTS_ACCESSED
+            WITH SYNONYMS ('tables accessed', 'objects read', 'direct access', 'what tables')
+            COMMENT = 'Array of tables/views directly referenced in the query - flatten with LATERAL FLATTEN',
+        ACCESS_HISTORY.base_objects_accessed AS ACCESS_HISTORY.BASE_OBJECTS_ACCESSED
+            WITH SYNONYMS ('base tables', 'underlying tables', 'source tables')
+            COMMENT = 'Array of base tables accessed (through views) - flatten with LATERAL FLATTEN',
+        ACCESS_HISTORY.objects_modified AS ACCESS_HISTORY.OBJECTS_MODIFIED
+            WITH SYNONYMS ('tables modified', 'objects written', 'data changes')
+            COMMENT = 'Array of tables/objects modified by the query - flatten with LATERAL FLATTEN',
+        ACCESS_HISTORY.policies_referenced AS ACCESS_HISTORY.POLICIES_REFERENCED
+            WITH SYNONYMS ('masking policies', 'row access policies', 'security policies')
+            COMMENT = 'Array of data protection policies applied during query execution',
+        ACCESS_HISTORY.parent_query_id AS ACCESS_HISTORY.PARENT_QUERY_ID
+            WITH SYNONYMS ('parent query')
+            COMMENT = 'Parent query ID if this is a child query',
+        ACCESS_HISTORY.root_query_id AS ACCESS_HISTORY.ROOT_QUERY_ID
+            WITH SYNONYMS ('root query', 'original query')
+            COMMENT = 'Root query ID in a query hierarchy'
+    )
+    
+    METRICS (
+        -- Query Count Metrics
+        QUERY_HISTORY.total_queries AS COUNT(QUERY_HISTORY.query_id)
+            WITH SYNONYMS ('query count', 'number of queries', 'executions')
+            COMMENT = 'Total number of queries',
+        QUERY_HISTORY.successful_queries AS SUM(CASE WHEN QUERY_HISTORY.execution_status = 'SUCCESS' THEN 1 ELSE 0 END)
+            WITH SYNONYMS ('successes', 'successful count')
+            COMMENT = 'Number of successful queries',
+        QUERY_HISTORY.failed_queries AS SUM(CASE WHEN QUERY_HISTORY.execution_status != 'SUCCESS' THEN 1 ELSE 0 END)
+            WITH SYNONYMS ('failures', 'failed count', 'errors')
+            COMMENT = 'Number of failed queries',
+        QUERY_HISTORY.unique_query_patterns AS COUNT(DISTINCT QUERY_HISTORY.query_parameterized_hash)
+            WITH SYNONYMS ('unique queries', 'distinct patterns')
+            COMMENT = 'Number of unique query patterns (by parameterized hash)',
+            
+        -- Duration Metrics
+        QUERY_HISTORY.avg_duration_ms AS AVG(QUERY_HISTORY.total_elapsed_time)
+            WITH SYNONYMS ('average duration', 'mean time', 'avg runtime')
+            COMMENT = 'Average query duration in milliseconds',
+        QUERY_HISTORY.max_duration_ms AS MAX(QUERY_HISTORY.total_elapsed_time)
+            WITH SYNONYMS ('max duration', 'longest query', 'slowest')
+            COMMENT = 'Maximum query duration in milliseconds',
+        QUERY_HISTORY.total_duration_ms AS SUM(QUERY_HISTORY.total_elapsed_time)
+            WITH SYNONYMS ('total time', 'cumulative duration')
+            COMMENT = 'Sum of all query durations',
+        QUERY_HISTORY.p95_duration_approx AS APPROX_PERCENTILE(QUERY_HISTORY.total_elapsed_time, 0.95)
+            WITH SYNONYMS ('95th percentile', 'p95 duration')
+            COMMENT = 'Approximate 95th percentile query duration',
+            
+        -- Long Running Query Detection (>5 minutes)
+        QUERY_HISTORY.long_running_count AS SUM(CASE WHEN QUERY_HISTORY.total_elapsed_time > 300000 THEN 1 ELSE 0 END)
+            WITH SYNONYMS ('slow queries', 'long queries')
+            COMMENT = 'Queries running longer than 5 minutes (300000ms)',
+            
+        -- I/O Metrics
+        QUERY_HISTORY.total_bytes_scanned AS SUM(QUERY_HISTORY.bytes_scanned)
+            WITH SYNONYMS ('total scanned', 'data read')
+            COMMENT = 'Total bytes scanned across all queries',
+        QUERY_HISTORY.avg_bytes_scanned AS AVG(QUERY_HISTORY.bytes_scanned)
+            WITH SYNONYMS ('average scan')
+            COMMENT = 'Average bytes scanned per query',
+        QUERY_HISTORY.total_rows_produced AS SUM(QUERY_HISTORY.rows_produced)
+            WITH SYNONYMS ('total rows')
+            COMMENT = 'Total rows returned across all queries',
+            
+        -- Partition Scan Metrics (for clustering efficiency)
+        QUERY_HISTORY.avg_partition_scan_pct AS AVG(QUERY_HISTORY.partitions_scanned / NULLIF(QUERY_HISTORY.partitions_total, 0) * 100)
+            WITH SYNONYMS ('average scan percentage', 'avg partition pct')
+            COMMENT = 'Average percentage of partitions scanned - high values indicate poor clustering',
+        QUERY_HISTORY.high_scan_pct_count AS SUM(CASE WHEN QUERY_HISTORY.partitions_scanned / NULLIF(QUERY_HISTORY.partitions_total, 0) > 0.9 THEN 1 ELSE 0 END)
+            WITH SYNONYMS ('full scan queries', 'high scan count')
+            COMMENT = 'Queries scanning >90% of partitions - candidates for clustering optimization',
+            
+        -- Cache Metrics
+        QUERY_HISTORY.avg_cache_hit_ratio AS AVG(QUERY_HISTORY.cache_hit_ratio)
+            WITH SYNONYMS ('average cache hit', 'cache efficiency')
+            COMMENT = 'Average cache hit ratio across queries',
+        QUERY_HISTORY.low_cache_hit_count AS SUM(CASE WHEN QUERY_HISTORY.cache_hit_ratio < 0.2 THEN 1 ELSE 0 END)
+            WITH SYNONYMS ('cache misses', 'low cache queries')
+            COMMENT = 'Queries with <20% cache hit - cold queries or large scans',
+            
+        -- Spill Metrics (memory pressure indicators)
+        QUERY_HISTORY.total_spill_bytes AS SUM(QUERY_HISTORY.bytes_spilled_local + QUERY_HISTORY.bytes_spilled_remote)
+            WITH SYNONYMS ('total spillage', 'spill total')
+            COMMENT = 'Total bytes spilled across all queries',
+        QUERY_HISTORY.queries_with_remote_spill AS SUM(CASE WHEN QUERY_HISTORY.bytes_spilled_remote > 0 THEN 1 ELSE 0 END)
+            WITH SYNONYMS ('remote spill count', 'severe spill')
+            COMMENT = 'Queries with remote spillage - consider warehouse upsizing',
+        QUERY_HISTORY.queries_with_any_spill AS SUM(CASE WHEN QUERY_HISTORY.bytes_spilled_local + QUERY_HISTORY.bytes_spilled_remote > 0 THEN 1 ELSE 0 END)
+            WITH SYNONYMS ('spill count', 'memory pressure queries')
+            COMMENT = 'Queries with any spillage',
+            
+        -- Queue Time Metrics (capacity indicators)
+        QUERY_HISTORY.total_queue_time AS SUM(QUERY_HISTORY.queued_overload_time + QUERY_HISTORY.queued_provisioning_time)
+            WITH SYNONYMS ('total wait time', 'queue total')
+            COMMENT = 'Total time queries spent waiting',
+        QUERY_HISTORY.avg_queue_time AS AVG(QUERY_HISTORY.queued_overload_time + QUERY_HISTORY.queued_provisioning_time)
+            WITH SYNONYMS ('average wait', 'avg queue')
+            COMMENT = 'Average queue time per query',
+        QUERY_HISTORY.queries_with_high_queue AS SUM(CASE WHEN QUERY_HISTORY.queued_overload_time > 30000 THEN 1 ELSE 0 END)
+            WITH SYNONYMS ('queued queries', 'contention count')
+            COMMENT = 'Queries with >30s queue time - indicates capacity constraints',
+            
+        -- Cost Metrics
+        QUERY_HISTORY.total_cloud_credits AS SUM(QUERY_HISTORY.credits_used_cloud_services)
+            WITH SYNONYMS ('total cloud cost', 'service credits total')
+            COMMENT = 'Total cloud service credits consumed',
+            
+        -- User/Role Distribution
+        QUERY_HISTORY.unique_users AS COUNT(DISTINCT QUERY_HISTORY.user_name)
+            WITH SYNONYMS ('user count', 'distinct users')
+            COMMENT = 'Number of unique users running queries',
+        QUERY_HISTORY.unique_roles AS COUNT(DISTINCT QUERY_HISTORY.role_name)
+            WITH SYNONYMS ('role count', 'distinct roles')
+            COMMENT = 'Number of unique roles used'
+    )
+    
+    COMMENT = 'Comprehensive query performance analytics with table-level access patterns, user attribution, and alerting metrics for identifying long-running queries, high scan percentages, memory pressure, and capacity constraints'
+    
+    AI_SQL_GENERATION 'Always filter with "_IS_CURRENT" = TRUE to get current records. Use START_TIME for time-based filtering. 
+
+ALERTING THRESHOLDS:
+- Long-running queries: TOTAL_ELAPSED_TIME > 300000 (5 minutes in ms)
+- High scan percentage: PARTITIONS_SCANNED / NULLIF(PARTITIONS_TOTAL, 0) > 0.9 indicates poor clustering
+- Memory pressure: BYTES_SPILLED_TO_REMOTE_STORAGE > 0 suggests warehouse upsizing
+- Queue contention: QUEUED_OVERLOAD_TIME > 30000 (30 seconds) indicates capacity issues
+- Low cache hits: PERCENTAGE_SCANNED_FROM_CACHE < 0.2 may indicate cold queries
+
+TABLE-LEVEL ACCESS (requires LATERAL FLATTEN):
+- To find which tables a user accessed: LATERAL FLATTEN(INPUT => DIRECT_OBJECTS_ACCESSED) f, then f.VALUE:objectName::STRING
+- To find base tables through views: LATERAL FLATTEN(INPUT => BASE_OBJECTS_ACCESSED)
+- To find modified tables: LATERAL FLATTEN(INPUT => OBJECTS_MODIFIED)
+- To find applied policies: LATERAL FLATTEN(INPUT => POLICIES_REFERENCED)
+
+QUERY GROUPING:
+- Use QUERY_PARAMETERIZED_HASH to group similar queries with different parameter values
+- Use QUERY_HASH for exact query text matching
+
+EXECUTION_STATUS values: SUCCESS, FAIL, INCIDENT
+WAREHOUSE_SIZE values: X-Small, Small, Medium, Large, X-Large, 2X-Large, etc.
+QUERY_TYPE values: SELECT, INSERT, UPDATE, DELETE, CREATE_TABLE, etc.'
+
+    AI_QUESTION_CATEGORIZATION 'This semantic view answers questions about:
+- Query performance analysis and duration trends
+- Long-running query identification and alerting
+- High partition scan percentage queries (clustering opportunities)
+- Memory pressure analysis (spill detection for warehouse sizing)
+- Queue time analysis (capacity planning)
+- Cache hit ratio analysis
+- Which users accessed which tables (user/table attribution)
+- What data did a specific user query
+- Table access patterns and frequency
+- Data lineage - what objects were modified by queries
+- Policy-protected data access auditing
+- Cost attribution by user, role, or query tag
+- Failed query analysis and error patterns
+- Identifying expensive query patterns by parameterized hash
+- Warehouse utilization and load analysis';
+
+
+-- =============================================================================
 -- GRANTS
 -- =============================================================================
 

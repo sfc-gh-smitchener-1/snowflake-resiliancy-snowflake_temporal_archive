@@ -49,12 +49,12 @@ SNOWFLAKE.ACCOUNT_USAGE (186 views, 1-year retention)
          ▼
 ┌─────────────────────────────────────────────────────────┐
 │  TEMPORAL_ARCHIVE Database                              │
-│  ├── ACCOUNT_USAGE Schema (SCD Type 2 archive tables)  │
-│  ├── SEMANTIC Schema (8 semantic views)                │
-│  ├── AGENTS Schema (SNOWFLAKE_INTELLIGENCE agent)      │
-│  └── ARCHIVE Schema (procedures, tasks, logging)       │
+│  ├── ACCOUNT_USAGE Schema (SCD Type 2 archive tables)   │
+│  ├── SEMANTIC Schema (8 semantic views)                 │
+│  ├── AGENTS Schema (SNOWFLAKE_INTELLIGENCE agent)       │
+│  └── ARCHIVE Schema (procedures, tasks, logging)        │
 │                                                         │
-│  + WORM Backup Policy (7-year retention, immutable)    │
+│  + WORM Backup Policy (7-year retention, immutable)     │
 └─────────────────────────────────────────────────────────┘
 ```
 
