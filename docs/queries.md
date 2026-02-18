@@ -290,6 +290,303 @@ ORDER BY month DESC;
 
 ---
 
+## Query Performance Analytics
+
+### Long-Running Query Detection
+
+Identify queries running longer than 5 minutes for performance investigation.
+
+```sql
+-- Find long-running queries (>5 minutes) with user/warehouse context
+
+SELECT 
+    QUERY_ID,
+    USER_NAME,
+    ROLE_NAME,
+    WAREHOUSE_NAME,
+    WAREHOUSE_SIZE,
+    QUERY_TYPE,
+    TOTAL_ELAPSED_TIME / 1000 / 60 AS duration_minutes,
+    BYTES_SCANNED / POWER(1024, 3) AS gb_scanned,
+    PARTITIONS_SCANNED,
+    PARTITIONS_TOTAL,
+    ROUND(PARTITIONS_SCANNED * 100.0 / NULLIF(PARTITIONS_TOTAL, 0), 2) AS partition_scan_pct,
+    EXECUTION_STATUS,
+    START_TIME
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND TOTAL_ELAPSED_TIME > 300000  -- 5 minutes in milliseconds
+ORDER BY TOTAL_ELAPSED_TIME DESC
+LIMIT 50;
+```
+
+### High Partition Scan Percentage (Clustering Candidates)
+
+Find queries scanning >90% of partitions - candidates for table clustering.
+
+```sql
+-- Queries with poor partition pruning (clustering optimization candidates)
+
+SELECT 
+    QUERY_PARAMETERIZED_HASH,
+    COUNT(*) AS execution_count,
+    AVG(TOTAL_ELAPSED_TIME) / 1000 AS avg_duration_sec,
+    AVG(PARTITIONS_SCANNED * 100.0 / NULLIF(PARTITIONS_TOTAL, 0)) AS avg_scan_pct,
+    MAX(PARTITIONS_TOTAL) AS max_partitions,
+    SUM(BYTES_SCANNED) / POWER(1024, 4) AS total_tb_scanned,
+    LISTAGG(DISTINCT DATABASE_NAME || '.' || SCHEMA_NAME, ', ') AS databases_accessed
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND PARTITIONS_TOTAL > 100  -- Only tables with significant partitions
+  AND PARTITIONS_SCANNED / NULLIF(PARTITIONS_TOTAL, 0) > 0.9  -- >90% scan
+  AND START_TIME >= DATEADD('day', -30, CURRENT_DATE())
+GROUP BY QUERY_PARAMETERIZED_HASH
+ORDER BY total_tb_scanned DESC
+LIMIT 20;
+```
+
+### Memory Pressure Analysis (Spill Detection)
+
+Identify queries with memory spill - candidates for warehouse upsizing.
+
+```sql
+-- Queries with remote spill (severe memory pressure)
+
+SELECT 
+    USER_NAME,
+    WAREHOUSE_NAME,
+    WAREHOUSE_SIZE,
+    QUERY_TYPE,
+    QUERY_ID,
+    TOTAL_ELAPSED_TIME / 1000 AS duration_sec,
+    BYTES_SPILLED_TO_LOCAL_STORAGE / POWER(1024, 3) AS local_spill_gb,
+    BYTES_SPILLED_TO_REMOTE_STORAGE / POWER(1024, 3) AS remote_spill_gb,
+    BYTES_SCANNED / POWER(1024, 3) AS gb_scanned,
+    CASE 
+        WHEN BYTES_SPILLED_TO_REMOTE_STORAGE > 0 THEN 'CRITICAL: Upsize warehouse'
+        WHEN BYTES_SPILLED_TO_LOCAL_STORAGE > POWER(1024, 3) THEN 'WARNING: Consider upsizing'
+        ELSE 'OK'
+    END AS recommendation,
+    START_TIME
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND (BYTES_SPILLED_TO_LOCAL_STORAGE > 0 OR BYTES_SPILLED_TO_REMOTE_STORAGE > 0)
+ORDER BY BYTES_SPILLED_TO_REMOTE_STORAGE DESC, BYTES_SPILLED_TO_LOCAL_STORAGE DESC
+LIMIT 50;
+```
+
+### Queue Time Analysis (Capacity Planning)
+
+Detect warehouse capacity constraints via queue time patterns.
+
+```sql
+-- Queries with significant queue time (capacity constraints)
+
+SELECT 
+    WAREHOUSE_NAME,
+    DATE_TRUNC('hour', START_TIME) AS hour,
+    COUNT(*) AS query_count,
+    AVG(QUEUED_OVERLOAD_TIME) / 1000 AS avg_queue_sec,
+    MAX(QUEUED_OVERLOAD_TIME) / 1000 AS max_queue_sec,
+    SUM(CASE WHEN QUEUED_OVERLOAD_TIME > 30000 THEN 1 ELSE 0 END) AS high_queue_count,
+    ROUND(SUM(CASE WHEN QUEUED_OVERLOAD_TIME > 30000 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS pct_queued,
+    CASE 
+        WHEN AVG(QUEUED_OVERLOAD_TIME) > 60000 THEN 'CRITICAL: Multi-cluster or upsize'
+        WHEN AVG(QUEUED_OVERLOAD_TIME) > 30000 THEN 'WARNING: Consider scaling'
+        ELSE 'OK'
+    END AS recommendation
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND START_TIME >= DATEADD('day', -7, CURRENT_DATE())
+GROUP BY WAREHOUSE_NAME, DATE_TRUNC('hour', START_TIME)
+HAVING AVG(QUEUED_OVERLOAD_TIME) > 5000
+ORDER BY avg_queue_sec DESC;
+```
+
+### User-Table Access Patterns
+
+Track which users accessed which tables using ACCESS_HISTORY.
+
+```sql
+-- Who accessed which tables (requires LATERAL FLATTEN for ACCESS_HISTORY arrays)
+
+SELECT 
+    qh.USER_NAME,
+    qh.ROLE_NAME,
+    f.VALUE:objectName::STRING AS table_accessed,
+    f.VALUE:objectDomain::STRING AS object_type,
+    COUNT(*) AS access_count,
+    MIN(qh.START_TIME) AS first_access,
+    MAX(qh.START_TIME) AS last_access,
+    SUM(qh.BYTES_SCANNED) / POWER(1024, 3) AS total_gb_scanned
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE qh
+JOIN TEMPORAL_ARCHIVE.ACCOUNT_USAGE.ACCESS_HISTORY_ARCHIVE ah 
+    ON qh.QUERY_ID = ah.QUERY_ID AND ah."_IS_CURRENT" = TRUE
+, LATERAL FLATTEN(INPUT => ah.DIRECT_OBJECTS_ACCESSED) f
+WHERE qh."_IS_CURRENT" = TRUE
+  AND qh.START_TIME >= DATEADD('day', -30, CURRENT_DATE())
+  AND f.VALUE:objectDomain::STRING = 'Table'
+GROUP BY qh.USER_NAME, qh.ROLE_NAME, f.VALUE:objectName::STRING, f.VALUE:objectDomain::STRING
+ORDER BY access_count DESC
+LIMIT 100;
+```
+
+### Data Lineage - Tables Modified by Queries
+
+Track which queries modified which tables for audit and lineage.
+
+```sql
+-- Data lineage: what tables were modified and by whom
+
+SELECT 
+    qh.USER_NAME,
+    qh.ROLE_NAME,
+    qh.QUERY_TYPE,
+    f.VALUE:objectName::STRING AS table_modified,
+    f.VALUE:columns AS columns_modified,
+    COUNT(*) AS modification_count,
+    SUM(qh.ROWS_INSERTED) AS total_rows_inserted,
+    SUM(qh.ROWS_UPDATED) AS total_rows_updated,
+    SUM(qh.ROWS_DELETED) AS total_rows_deleted,
+    MIN(qh.START_TIME) AS first_modification,
+    MAX(qh.START_TIME) AS last_modification
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE qh
+JOIN TEMPORAL_ARCHIVE.ACCOUNT_USAGE.ACCESS_HISTORY_ARCHIVE ah 
+    ON qh.QUERY_ID = ah.QUERY_ID AND ah."_IS_CURRENT" = TRUE
+, LATERAL FLATTEN(INPUT => ah.OBJECTS_MODIFIED) f
+WHERE qh."_IS_CURRENT" = TRUE
+  AND qh.START_TIME >= DATEADD('day', -30, CURRENT_DATE())
+GROUP BY qh.USER_NAME, qh.ROLE_NAME, qh.QUERY_TYPE, 
+         f.VALUE:objectName::STRING, f.VALUE:columns
+ORDER BY modification_count DESC;
+```
+
+### Cache Efficiency Analysis
+
+Analyze cache hit rates to identify cold query patterns.
+
+```sql
+-- Cache efficiency by warehouse and time of day
+
+SELECT 
+    WAREHOUSE_NAME,
+    EXTRACT(HOUR FROM START_TIME) AS hour_of_day,
+    COUNT(*) AS query_count,
+    AVG(PERCENTAGE_SCANNED_FROM_CACHE) * 100 AS avg_cache_hit_pct,
+    SUM(CASE WHEN PERCENTAGE_SCANNED_FROM_CACHE < 0.2 THEN 1 ELSE 0 END) AS low_cache_queries,
+    SUM(BYTES_SCANNED) / POWER(1024, 4) AS total_tb_scanned,
+    SUM(BYTES_SCANNED * (1 - PERCENTAGE_SCANNED_FROM_CACHE)) / POWER(1024, 4) AS tb_from_storage
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND START_TIME >= DATEADD('day', -7, CURRENT_DATE())
+  AND BYTES_SCANNED > 0
+GROUP BY WAREHOUSE_NAME, EXTRACT(HOUR FROM START_TIME)
+ORDER BY WAREHOUSE_NAME, hour_of_day;
+```
+
+### Repeated Expensive Query Patterns
+
+Group similar queries by parameterized hash to find optimization opportunities.
+
+```sql
+-- Most expensive repeated query patterns
+
+SELECT 
+    QUERY_PARAMETERIZED_HASH,
+    COUNT(*) AS execution_count,
+    COUNT(DISTINCT USER_NAME) AS unique_users,
+    AVG(TOTAL_ELAPSED_TIME) / 1000 AS avg_duration_sec,
+    SUM(TOTAL_ELAPSED_TIME) / 1000 / 60 AS total_duration_min,
+    AVG(BYTES_SCANNED) / POWER(1024, 3) AS avg_gb_scanned,
+    SUM(BYTES_SCANNED) / POWER(1024, 4) AS total_tb_scanned,
+    SUM(CREDITS_USED_CLOUD_SERVICES) AS total_cloud_credits,
+    AVG(PARTITIONS_SCANNED * 100.0 / NULLIF(PARTITIONS_TOTAL, 0)) AS avg_partition_scan_pct,
+    MAX(QUERY_TEXT) AS sample_query
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND START_TIME >= DATEADD('day', -30, CURRENT_DATE())
+  AND EXECUTION_STATUS = 'SUCCESS'
+GROUP BY QUERY_PARAMETERIZED_HASH
+HAVING COUNT(*) >= 10  -- Only patterns executed 10+ times
+ORDER BY total_tb_scanned DESC
+LIMIT 20;
+```
+
+### Policy-Protected Data Access Audit
+
+Track queries that accessed data protected by masking or row access policies.
+
+```sql
+-- Queries that accessed policy-protected data
+
+SELECT 
+    qh.USER_NAME,
+    qh.ROLE_NAME,
+    qh.QUERY_TYPE,
+    p.VALUE:policyName::STRING AS policy_name,
+    p.VALUE:policyKind::STRING AS policy_type,
+    COUNT(*) AS access_count,
+    MIN(qh.START_TIME) AS first_access,
+    MAX(qh.START_TIME) AS last_access
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE qh
+JOIN TEMPORAL_ARCHIVE.ACCOUNT_USAGE.ACCESS_HISTORY_ARCHIVE ah 
+    ON qh.QUERY_ID = ah.QUERY_ID AND ah."_IS_CURRENT" = TRUE
+, LATERAL FLATTEN(INPUT => ah.POLICIES_REFERENCED) p
+WHERE qh."_IS_CURRENT" = TRUE
+  AND qh.START_TIME >= DATEADD('day', -90, CURRENT_DATE())
+GROUP BY qh.USER_NAME, qh.ROLE_NAME, qh.QUERY_TYPE,
+         p.VALUE:policyName::STRING, p.VALUE:policyKind::STRING
+ORDER BY access_count DESC;
+```
+
+### Performance Alert Dashboard Query
+
+Comprehensive alert query combining all performance thresholds.
+
+```sql
+-- Performance alerts dashboard - queries needing attention
+
+SELECT 
+    QUERY_ID,
+    USER_NAME,
+    WAREHOUSE_NAME,
+    START_TIME,
+    TOTAL_ELAPSED_TIME / 1000 / 60 AS duration_min,
+    CASE 
+        WHEN TOTAL_ELAPSED_TIME > 300000 THEN 'LONG_RUNNING'
+        ELSE NULL 
+    END AS long_running_alert,
+    CASE 
+        WHEN PARTITIONS_SCANNED / NULLIF(PARTITIONS_TOTAL, 0) > 0.9 THEN 'HIGH_SCAN_PCT'
+        ELSE NULL 
+    END AS partition_alert,
+    CASE 
+        WHEN BYTES_SPILLED_TO_REMOTE_STORAGE > 0 THEN 'REMOTE_SPILL'
+        WHEN BYTES_SPILLED_TO_LOCAL_STORAGE > POWER(1024, 3) THEN 'LOCAL_SPILL'
+        ELSE NULL 
+    END AS spill_alert,
+    CASE 
+        WHEN QUEUED_OVERLOAD_TIME > 30000 THEN 'HIGH_QUEUE'
+        ELSE NULL 
+    END AS queue_alert,
+    CASE 
+        WHEN PERCENTAGE_SCANNED_FROM_CACHE < 0.1 AND BYTES_SCANNED > POWER(1024, 3) THEN 'CACHE_MISS'
+        ELSE NULL 
+    END AS cache_alert
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND START_TIME >= DATEADD('day', -1, CURRENT_DATE())
+  AND (
+    TOTAL_ELAPSED_TIME > 300000
+    OR PARTITIONS_SCANNED / NULLIF(PARTITIONS_TOTAL, 0) > 0.9
+    OR BYTES_SPILLED_TO_REMOTE_STORAGE > 0
+    OR QUEUED_OVERLOAD_TIME > 30000
+  )
+ORDER BY START_TIME DESC;
+```
+
+---
+
 ## BC/DR Analytics
 
 ### Hot Tables (High Churn)

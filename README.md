@@ -9,7 +9,7 @@
 | **Extended Retention** | Archive 186 ACCOUNT_USAGE views with 7+ year history (vs 1 year native) |
 | **SCD Type 2 History** | Track every change with full audit trail and point-in-time queries |
 | **WORM Compliance** | Immutable backups with RETENTION LOCK for SEC 17a-4, HIPAA, FINRA |
-| **AI-Ready Analytics** | 8 semantic views + Cortex Intelligence Agent for natural language queries |
+| **AI-Ready Analytics** | 9 semantic views + Cortex Intelligence Agent for natural language queries |
 | **Self-Service Deployment** | Cortex Code skill for parameterized deployment to any account |
 
 ## Quick Start
@@ -50,7 +50,7 @@ SNOWFLAKE.ACCOUNT_USAGE (186 views, 1-year retention)
 ┌─────────────────────────────────────────────────────────┐
 │  TEMPORAL_ARCHIVE Database                              │
 │  ├── ACCOUNT_USAGE Schema (SCD Type 2 archive tables)   │
-│  ├── SEMANTIC Schema (8 semantic views)                 │
+│  ├── SEMANTIC Schema (9 semantic views)                 │
 │  ├── AGENTS Schema (SNOWFLAKE_INTELLIGENCE agent)       │
 │  └── ARCHIVE Schema (procedures, tasks, logging)        │
 │                                                         │
@@ -63,7 +63,7 @@ SNOWFLAKE.ACCOUNT_USAGE (186 views, 1-year retention)
 | Component | Count | Description |
 |-----------|-------|-------------|
 | Archive Tables | 186 | SCD Type 2 tables from ACCOUNT_USAGE + ORGANIZATION_USAGE |
-| Semantic Views | 8 | Cost, security, storage, governance, tasks, BC/DR analytics |
+| Semantic Views | 9 | Cost, security, storage, governance, tasks, BC/DR, query performance analytics |
 | Cortex Agent | 1 | SNOWFLAKE_INTELLIGENCE with 8 tools for natural language queries |
 | Scheduled Tasks | 2 | Morning (6 AM) and evening (6 PM) SCD loads |
 | Backup Policy | 1 | WORM-compliant with 7-year retention |
@@ -80,6 +80,7 @@ SNOWFLAKE.ACCOUNT_USAGE (186 views, 1-year retention)
 | `GOVERNANCE_ANALYTICS` | Users, roles, grants, access control |
 | `TASK_ANALYTICS` | Task execution, failures, scheduling |
 | `BCDR_ANALYTICS` | RPO/RTO metrics, hot tables, replication |
+| `QUERY_PERFORMANCE_ANALYTICS` | Long-running queries, table access patterns, spill/queue alerts |
 
 ## Sample Agent Questions
 
@@ -89,6 +90,9 @@ SNOWFLAKE.ACCOUNT_USAGE (186 views, 1-year retention)
 "What are my hot tables with highest data churn?"
 "Who are the top credit consumers by role?"
 "What's my storage growth trend?"
+"Show me long-running queries over 5 minutes"
+"Which users accessed the CUSTOMERS table last week?"
+"What queries have high partition scan percentages?"
 ```
 
 ## Repository Structure
@@ -97,7 +101,7 @@ SNOWFLAKE.ACCOUNT_USAGE (186 views, 1-year retention)
 ├── sql/                        # Deployment SQL scripts
 │   ├── 01_initial_setup.sql    # Database, warehouse, roles, backup policy
 │   ├── 02_scd_load.sql         # SCD procedures and scheduled tasks
-│   ├── 03_semantic_layer.sql   # 8 semantic views for Cortex Analyst
+│   ├── 03_semantic_layer.sql   # 9 semantic views for Cortex Analyst
 │   ├── 04_streamlit_ddl.sql    # Streamlit support objects
 │   └── 05_streamlit_app.sql    # Streamlit app deployment
 ├── skill/                      # Cortex Code skill for self-service deployment

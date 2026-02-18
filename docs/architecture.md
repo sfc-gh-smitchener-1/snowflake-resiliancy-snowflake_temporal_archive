@@ -39,16 +39,17 @@ Detailed technical architecture of the Snowflake Temporal Archive solution.
     │                           │                                        │
     │                           ▼                                        │
     │  ┌────────────────────────────────────────────────────────────┐   │
-    │  │ SEMANTIC Schema (8 Semantic Views)                         │   │
-    │  │ • WAREHOUSE_COST_ANALYTICS                                 │   │
-    │  │ • SERVERLESS_COST_ANALYTICS                                │   │
-    │  │ • COST_ANALYTICS                                           │   │
-    │  │ • SECURITY_ANALYTICS                                       │   │
-    │  │ • STORAGE_ANALYTICS                                        │   │
-    │  │ • GOVERNANCE_ANALYTICS                                     │   │
-    │  │ • TASK_ANALYTICS                                           │   │
-    │  │ • BCDR_ANALYTICS                                           │   │
-    │  └────────────────────────────────────────────────────────────┘   │
+│  │ SEMANTIC Schema (9 Semantic Views)                         │   │
+│  │ • WAREHOUSE_COST_ANALYTICS                                 │   │
+│  │ • SERVERLESS_COST_ANALYTICS                                │   │
+│  │ • COST_ANALYTICS                                           │   │
+│  │ • SECURITY_ANALYTICS                                       │   │
+│  │ • STORAGE_ANALYTICS                                        │   │
+│  │ • GOVERNANCE_ANALYTICS                                     │   │
+│  │ • TASK_ANALYTICS                                           │   │
+│  │ • BCDR_ANALYTICS                                           │   │
+│  │ • QUERY_PERFORMANCE_ANALYTICS                              │   │
+│  └────────────────────────────────────────────────────────────┘   │
     │                           │                                        │
     │                           ▼                                        │
     │  ┌────────────────────────────────────────────────────────────┐   │

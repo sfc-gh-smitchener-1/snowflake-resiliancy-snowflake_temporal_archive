@@ -12,7 +12,7 @@ Deploy a complete temporal data archive solution that preserves your Snowflake A
 1. **SCD Type 2 Archive Tables** - Preserve every change to 186 ACCOUNT_USAGE views with full audit trail
 2. **WORM Backup Policy** - SEC 17a-4 / HIPAA / FINRA compliant immutable backups (7-year retention)
 3. **Automated Data Loads** - Twice daily scheduled tasks (configurable)
-4. **8 Semantic Views** - Natural language analytics via Cortex Analyst
+4. **9 Semantic Views** - Natural language analytics via Cortex Analyst
 5. **Cortex Intelligence Agent** - AI agent for deep account analysis
 6. **Streamlit Dashboard** - Interactive analytics application
 
@@ -98,7 +98,7 @@ Run the SQL scripts in order, substituting parameters:
 - Creates scheduled tasks for automated loads
 
 **3.3 Semantic Layer (03_semantic_layer.sql)**
-- Creates 8 semantic views for Cortex Analyst:
+- Creates 9 semantic views for Cortex Analyst:
   - WAREHOUSE_COST_ANALYTICS
   - SERVERLESS_COST_ANALYTICS
   - COST_ANALYTICS
@@ -107,6 +107,7 @@ Run the SQL scripts in order, substituting parameters:
   - STORAGE_ANALYTICS
   - GOVERNANCE_ANALYTICS
   - TASK_ANALYTICS
+  - QUERY_PERFORMANCE_ANALYTICS
 
 **3.4 Streamlit Support (04_streamlit_ddl.sql)**
 - Creates helper views and procedures
@@ -205,6 +206,12 @@ Once deployed, try these questions with the Intelligence Agent:
 - "Which tasks are failing most frequently?"
 - "Show me task error patterns"
 
+**Query Performance:**
+- "Show me long-running queries over 5 minutes"
+- "Which users accessed the CUSTOMERS table?"
+- "What queries have high partition scan percentages?"
+- "Find queries with memory spill issues"
+
 ## Troubleshooting
 
 ### "Insufficient privileges" Error
@@ -247,7 +254,7 @@ GRANT USAGE ON AGENT {{DATABASE_NAME}}.AGENTS.SNOWFLAKE_INTELLIGENCE TO ROLE <YO
 │  │ - 7+ year retention via WORM backup                         │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 │  ┌─────────────────────────────────────────────────────────────┐   │
-│  │ SEMANTIC Schema (8 Semantic Views)                          │   │
+│  │ SEMANTIC Schema (9 Semantic Views)                          │   │
 │  │ - WAREHOUSE_COST_ANALYTICS                                  │   │
 │  │ - SERVERLESS_COST_ANALYTICS                                 │   │
 │  │ - BCDR_ANALYTICS (hot tables, churn, RPO/RTO)              │   │
@@ -256,6 +263,7 @@ GRANT USAGE ON AGENT {{DATABASE_NAME}}.AGENTS.SNOWFLAKE_INTELLIGENCE TO ROLE <YO
 │  │ - GOVERNANCE_ANALYTICS                                      │   │
 │  │ - TASK_ANALYTICS                                            │   │
 │  │ - COST_ANALYTICS                                            │   │
+│  │ - QUERY_PERFORMANCE_ANALYTICS                               │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 │  ┌─────────────────────────────────────────────────────────────┐   │
 │  │ AGENTS Schema                                               │   │
