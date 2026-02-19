@@ -14,7 +14,11 @@
 
 ## Quick Start
 
-### Option 1: Cortex Code Skill (Recommended)
+### Option 1: Hands-On Quickstart (20-30 minutes)
+
+**[Quickstart Guide](docs/quickstart.md)** - Step-by-step tutorial to deploy Temporal Archive from scratch.
+
+### Option 2: Cortex Code Skill (Recommended for existing users)
 
 ```
 Deploy Temporal Archive to my account
@@ -25,7 +29,7 @@ Or with custom settings:
 Deploy Temporal Archive with database MY_ARCHIVE and warehouse MY_WH
 ```
 
-### Option 2: Manual SQL Deployment
+### Option 3: Manual SQL Deployment
 
 ```sql
 -- Run as ACCOUNTADMIN
@@ -112,6 +116,7 @@ SNOWFLAKE.ACCOUNT_USAGE (186 views, 1-year retention)
 ├── agent/                      # Cortex Agent configuration
 ├── src/                        # Streamlit application
 └── docs/                       # Extended documentation
+    ├── quickstart.md           # 20-30 min hands-on deployment guide
     ├── queries.md              # Sample analytical queries
     ├── skill-deployment.md     # Skill deployment guide
     ├── architecture.md         # Technical architecture details
@@ -122,6 +127,7 @@ SNOWFLAKE.ACCOUNT_USAGE (186 views, 1-year retention)
 
 | Document | Description |
 |----------|-------------|
+| **[Quickstart Guide](docs/quickstart.md)** | 20-30 minute hands-on tutorial for first-time deployment |
 | [Sample Queries](docs/queries.md) | Ready-to-use SQL queries for cost, security, compliance |
 | [Skill Deployment](docs/skill-deployment.md) | How to deploy using Cortex Code skill |
 | [Architecture](docs/architecture.md) | Technical design and data flow |
