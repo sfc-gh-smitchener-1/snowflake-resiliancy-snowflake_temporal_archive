@@ -1,4 +1,3 @@
-# Snowflake Temporal Archive
 
 ![Snowflake Temporal Archive](TempArchive.png)
 
