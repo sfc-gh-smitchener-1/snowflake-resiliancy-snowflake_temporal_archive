@@ -6,7 +6,7 @@ Detailed technical architecture of the Snowflake Temporal Archive solution.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              DATA FLOW ARCHITECTURE                              │
+│                              DATA FLOW ARCHITECTURE                             │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
     SNOWFLAKE.ACCOUNT_USAGE (186 views)
@@ -16,18 +16,18 @@ Detailed technical architecture of the Snowflake Temporal Archive solution.
                     │ Snowflake Tasks
                     ▼
     ┌───────────────────────────────────────────────────────────────────┐
-    │                    TEMPORAL_ARCHIVE Database                       │
-    │                                                                    │
+    │                    TEMPORAL_ARCHIVE Database                      │
+    │                                                                   │
     │  ┌────────────────────────────────────────────────────────────┐   │
-    │  │ ARCHIVE Schema                                              │   │
+    │  │ ARCHIVE Schema                                             │   │
     │  │ • VIEW_REGISTRY (186 source views)                         │   │
     │  │ • LOAD_LOG (execution history)                             │   │
     │  │ • RUN_SCD_LOAD() procedure                                 │   │
     │  │ • TASK_SCD_LOAD_MORNING (6 AM)                             │   │
     │  │ • TASK_SCD_LOAD_EVENING (6 PM)                             │   │
     │  └────────────────────────────────────────────────────────────┘   │
-    │                           │                                        │
-    │                           ▼                                        │
+    │                           │                                       │
+    │                           ▼                                       │
     │  ┌────────────────────────────────────────────────────────────┐   │
     │  │ ACCOUNT_USAGE Schema (SCD Type 2 Archive Tables)           │   │
     │  │ • QUERY_HISTORY_ARCHIVE                                    │   │
@@ -36,29 +36,29 @@ Detailed technical architecture of the Snowflake Temporal Archive solution.
     │  │ • WAREHOUSE_METERING_HISTORY_ARCHIVE                       │   │
     │  │ • ... (186 total archive tables)                           │   │
     │  └────────────────────────────────────────────────────────────┘   │
-    │                           │                                        │
-    │                           ▼                                        │
+    │                           │                                       │
+    │                           ▼                                       │
     │  ┌────────────────────────────────────────────────────────────┐   │
-│  │ SEMANTIC Schema (9 Semantic Views)                         │   │
-│  │ • WAREHOUSE_COST_ANALYTICS                                 │   │
-│  │ • SERVERLESS_COST_ANALYTICS                                │   │
-│  │ • COST_ANALYTICS                                           │   │
-│  │ • SECURITY_ANALYTICS                                       │   │
-│  │ • STORAGE_ANALYTICS                                        │   │
-│  │ • GOVERNANCE_ANALYTICS                                     │   │
-│  │ • TASK_ANALYTICS                                           │   │
-│  │ • BCDR_ANALYTICS                                           │   │
-│  │ • QUERY_PERFORMANCE_ANALYTICS                              │   │
-│  └────────────────────────────────────────────────────────────┘   │
-    │                           │                                        │
-    │                           ▼                                        │
+    │  │ SEMANTIC Schema (9 Semantic Views)                         │   │
+    │  │ • WAREHOUSE_COST_ANALYTICS                                 │   │
+    │  │ • SERVERLESS_COST_ANALYTICS                                │   │
+    │  │ • COST_ANALYTICS                                           │   │
+    │  │ • SECURITY_ANALYTICS                                       │   │  
+    │  │ • STORAGE_ANALYTICS                                        │   │
+    │  │ • GOVERNANCE_ANALYTICS                                     │   │
+    │  │ • TASK_ANALYTICS                                           │   │
+    │  │ • BCDR_ANALYTICS                                           │   │
+    │  │ • QUERY_PERFORMANCE_ANALYTICS                              │   │
+    │  └────────────────────────────────────────────────────────────┘   │
+    │                           │                                       │
+    │                           ▼                                       │
     │  ┌────────────────────────────────────────────────────────────┐   │
     │  │ AGENTS Schema                                              │   │
     │  │ • SNOWFLAKE_INTELLIGENCE (Cortex Agent)                    │   │
     │  │   - 8 tools mapping to semantic views                      │   │
     │  │   - Natural language query interface                       │   │
     │  └────────────────────────────────────────────────────────────┘   │
-    │                                                                    │
+    │                                                                   │
     │  ┌────────────────────────────────────────────────────────────┐   │
     │  │ Backup Policy (WORM)                                       │   │
     │  │ • TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY                      │   │
@@ -66,7 +66,7 @@ Detailed technical architecture of the Snowflake Temporal Archive solution.
     │  │ • RETENTION LOCK (immutable)                               │   │
     │  │ • Daily backups (1440 minutes)                             │   │
     │  └────────────────────────────────────────────────────────────┘   │
-    │                                                                    │
+    │                                                                   │
     └───────────────────────────────────────────────────────────────────┘
 ```
 

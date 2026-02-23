@@ -1,5 +1,7 @@
 # Snowflake Temporal Archive
 
+![Snowflake Temporal Archive](TempArchive.png)
+
 **Preserve your Snowflake ACCOUNT_USAGE history beyond the native 365-day limit with SCD Type 2 archiving and WORM-compliant backups.**
 
 ## What This Does
