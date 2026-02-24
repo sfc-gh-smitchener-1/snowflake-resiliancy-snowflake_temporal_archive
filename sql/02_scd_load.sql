@@ -253,19 +253,23 @@ BEGIN
         EXECUTE IMMEDIATE 'CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.' || v_target_schema;
         
         -- Create table with surrogate key and SCD columns
-        -- Use OBJECT_CONSTRUCT(*) to create a JSON object of all columns for hashing
+        -- Use CTE to compute OBJECT_CONSTRUCT(*) in SELECT clause (required by Snowflake),
+        -- then hash it in the outer query and exclude the helper column
         v_create_sql := 'CREATE TABLE ' || v_target_fqn || ' AS 
+            WITH src_with_hash AS (
+                SELECT *, OBJECT_CONSTRUCT(*) AS _obj FROM ' || v_source_fqn || '
+            )
             SELECT 
                 ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS "_ARCHIVE_ID",
-                src.*,
-                SHA2(TO_JSON(OBJECT_CONSTRUCT(*)), 256) AS "_ROW_HASH",
+                * EXCLUDE _obj,
+                SHA2(TO_JSON(_obj), 256) AS "_ROW_HASH",
                 CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_LOADED_AT",
                 ''SNOWFLAKE_' || v_schema || ''' AS "_SOURCE_SYSTEM",
                 ''' || v_view || ''' AS "_SOURCE_TABLE",
                 TRUE AS "_IS_CURRENT",
                 CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_VALID_FROM",
                 ''9999-12-31 23:59:59''::TIMESTAMP_NTZ AS "_VALID_TO"
-            FROM ' || v_source_fqn || ' src';
+            FROM src_with_hash';
         
         EXECUTE IMMEDIATE v_create_sql;
         
@@ -301,14 +305,15 @@ BEGIN
     
     -- Step 1: Close records that have changed (update _IS_CURRENT = FALSE)
     -- Compare hashes - if source hash not in target's current hashes, mark as closed
+    -- Use subquery to compute OBJECT_CONSTRUCT(*) in SELECT clause (required by Snowflake)
     v_update_sql := '
         UPDATE ' || v_target_fqn || ' tgt
         SET "_IS_CURRENT" = FALSE,
             "_VALID_TO" = CURRENT_TIMESTAMP()::TIMESTAMP_NTZ
         WHERE tgt."_IS_CURRENT" = TRUE
           AND tgt."_ROW_HASH" NOT IN (
-              SELECT SHA2(TO_JSON(OBJECT_CONSTRUCT(*)), 256) 
-              FROM ' || v_source_fqn || '
+              SELECT SHA2(TO_JSON(_obj), 256) 
+              FROM (SELECT OBJECT_CONSTRUCT(*) AS _obj FROM ' || v_source_fqn || ')
           )';
     
     EXECUTE IMMEDIATE v_update_sql;
@@ -316,21 +321,25 @@ BEGIN
     
     -- Step 2: Insert new/changed records
     -- Only insert rows whose hash doesn't exist in target's current records
+    -- Use CTE to compute OBJECT_CONSTRUCT(*) in SELECT clause (required by Snowflake)
     v_insert_sql := '
         INSERT INTO ' || v_target_fqn || '
+        WITH src_with_hash AS (
+            SELECT *, OBJECT_CONSTRUCT(*) AS _obj FROM ' || v_source_fqn || '
+        )
         SELECT 
             (SELECT COALESCE(MAX("_ARCHIVE_ID"), 0) FROM ' || v_target_fqn || ') + 
                 ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS "_ARCHIVE_ID",
-            src.*,
-            SHA2(TO_JSON(OBJECT_CONSTRUCT(*)), 256) AS "_ROW_HASH",
+            * EXCLUDE _obj,
+            SHA2(TO_JSON(_obj), 256) AS "_ROW_HASH",
             CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_LOADED_AT",
             ''SNOWFLAKE_' || v_schema || ''' AS "_SOURCE_SYSTEM",
             ''' || v_view || ''' AS "_SOURCE_TABLE",
             TRUE AS "_IS_CURRENT",
             CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_VALID_FROM",
             ''9999-12-31 23:59:59''::TIMESTAMP_NTZ AS "_VALID_TO"
-        FROM ' || v_source_fqn || ' src
-        WHERE SHA2(TO_JSON(OBJECT_CONSTRUCT(*)), 256) NOT IN (
+        FROM src_with_hash
+        WHERE SHA2(TO_JSON(_obj), 256) NOT IN (
             SELECT "_ROW_HASH" FROM ' || v_target_fqn || ' WHERE "_IS_CURRENT" = TRUE
         )';
     
