@@ -1,13 +1,16 @@
 /*
 ================================================================================
-SNOWFLAKE TEMPORAL ARCHIVE - SCD TYPE 2 LOAD (SIMPLIFIED)
+SNOWFLAKE TEMPORAL ARCHIVE - SCD TYPE 2 LOAD (OPTIMIZED WITH DELTA STRATEGIES)
 ================================================================================
 
 Dynamically discovers ALL views from SNOWFLAKE.ACCOUNT_USAGE and 
 SNOWFLAKE.ORGANIZATION_USAGE and archives them using SCD Type 2 with:
   - Surrogate key (_ARCHIVE_ID) as primary key
-  - Row hash for change detection
-  - No hardcoded PK mappings needed
+  - Row hash (SHA-256) for WORM compliance and change detection
+  - Three load strategies to minimize redundant computation:
+    * APPEND_ONLY   - Timestamp watermark delta (event/history tables)
+    * SOFT_DELETE_MUTABLE - Full SCD2 with temp table optimization (catalog objects)
+    * FULL_COMPARE  - Full hash comparison fallback (no natural key/timestamp)
 
 TIMEZONE HANDLING:
   - All timestamps use TIMESTAMP_NTZ (no timezone) via CURRENT_TIMESTAMP()
@@ -46,150 +49,239 @@ CREATE TABLE IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG (
 COMMENT = 'Log of SCD load executions';
 
 -- =============================================================================
--- VIEW REGISTRY: All known ACCOUNT_USAGE and ORGANIZATION_USAGE views
--- This ensures we attempt to load ALL views, not just what INFORMATION_SCHEMA shows
+-- WATERMARK STATE TABLE
+-- Tracks the last loaded watermark value per view for delta-based loading
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE.WATERMARK_STATE (
+    SOURCE_SCHEMA       VARCHAR NOT NULL,
+    SOURCE_VIEW         VARCHAR NOT NULL,
+    LAST_WATERMARK_VALUE VARCHAR,
+    LAST_LOADED_AT      TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    ROWS_LOADED         INTEGER DEFAULT 0,
+    PRIMARY KEY (SOURCE_SCHEMA, SOURCE_VIEW)
+)
+COMMENT = 'Tracks watermark values for delta-based incremental loading';
+
+-- =============================================================================
+-- VIEW REGISTRY: All known views with load strategy classification
+-- =============================================================================
+-- LOAD_STRATEGY values:
+--   APPEND_ONLY        - Immutable event/history data. Use watermark to load only new rows.
+--   SOFT_DELETE_MUTABLE - Catalog objects that can change. Full SCD2 with temp table optimization.
+--   FULL_COMPARE       - No natural key or timestamp. Full hash comparison on every run.
+--
+-- WATERMARK_COLUMN: The column used to detect new/changed data (timestamp or date).
+-- UNIQUE_KEY_COLUMN: Natural unique identifier if one exists (informational).
 -- =============================================================================
 
 CREATE OR REPLACE TABLE TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (
-    SOURCE_SCHEMA VARCHAR(100),
-    SOURCE_VIEW VARCHAR(200),
-    IS_ACTIVE BOOLEAN DEFAULT TRUE,
-    CREATED_AT TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+    SOURCE_SCHEMA       VARCHAR(100),
+    SOURCE_VIEW         VARCHAR(200),
+    IS_ACTIVE           BOOLEAN DEFAULT TRUE,
+    LOAD_STRATEGY       VARCHAR(30) DEFAULT 'FULL_COMPARE',
+    WATERMARK_COLUMN    VARCHAR(100) DEFAULT NULL,
+    UNIQUE_KEY_COLUMN   VARCHAR(100) DEFAULT NULL,
+    CREATED_AT          TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
 )
-COMMENT = 'Registry of all known views to archive from SNOWFLAKE database';
+COMMENT = 'Registry of all known views to archive from SNOWFLAKE database with load strategy classification';
 
--- Truncate and reload to ensure we have the full list
 TRUNCATE TABLE TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY;
 
--- Insert ALL known ACCOUNT_USAGE views (as of 2024)
-INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW) VALUES
--- Core metadata views
-('ACCOUNT_USAGE', 'DATABASES'),
-('ACCOUNT_USAGE', 'SCHEMATA'),
-('ACCOUNT_USAGE', 'TABLES'),
-('ACCOUNT_USAGE', 'VIEWS'),
-('ACCOUNT_USAGE', 'COLUMNS'),
-('ACCOUNT_USAGE', 'TABLE_CONSTRAINTS'),
-('ACCOUNT_USAGE', 'REFERENTIAL_CONSTRAINTS'),
-('ACCOUNT_USAGE', 'SEQUENCES'),
-('ACCOUNT_USAGE', 'FILE_FORMATS'),
-('ACCOUNT_USAGE', 'FUNCTIONS'),
-('ACCOUNT_USAGE', 'PROCEDURES'),
-('ACCOUNT_USAGE', 'STAGES'),
-('ACCOUNT_USAGE', 'PIPES'),
-('ACCOUNT_USAGE', 'STREAMS'),
-('ACCOUNT_USAGE', 'TASKS'),
-('ACCOUNT_USAGE', 'TAGS'),
-('ACCOUNT_USAGE', 'TAG_REFERENCES'),
--- Security and access
-('ACCOUNT_USAGE', 'USERS'),
-('ACCOUNT_USAGE', 'ROLES'),
-('ACCOUNT_USAGE', 'GRANTS_TO_USERS'),
-('ACCOUNT_USAGE', 'GRANTS_TO_ROLES'),
-('ACCOUNT_USAGE', 'LOGIN_HISTORY'),
-('ACCOUNT_USAGE', 'SESSIONS'),
-('ACCOUNT_USAGE', 'ACCESS_HISTORY'),
-('ACCOUNT_USAGE', 'QUERY_HISTORY'),
-('ACCOUNT_USAGE', 'POLICY_REFERENCES'),
-('ACCOUNT_USAGE', 'MASKING_POLICIES'),
-('ACCOUNT_USAGE', 'ROW_ACCESS_POLICIES'),
-('ACCOUNT_USAGE', 'PASSWORD_POLICIES'),
-('ACCOUNT_USAGE', 'SESSION_POLICIES'),
-('ACCOUNT_USAGE', 'NETWORK_POLICIES'),
--- Metering and usage
-('ACCOUNT_USAGE', 'WAREHOUSE_METERING_HISTORY'),
-('ACCOUNT_USAGE', 'WAREHOUSE_LOAD_HISTORY'),
-('ACCOUNT_USAGE', 'WAREHOUSE_EVENTS_HISTORY'),
-('ACCOUNT_USAGE', 'METERING_HISTORY'),
-('ACCOUNT_USAGE', 'METERING_DAILY_HISTORY'),
-('ACCOUNT_USAGE', 'STORAGE_USAGE'),
-('ACCOUNT_USAGE', 'DATABASE_STORAGE_USAGE_HISTORY'),
-('ACCOUNT_USAGE', 'STAGE_STORAGE_USAGE_HISTORY'),
-('ACCOUNT_USAGE', 'TABLE_STORAGE_METRICS'),
-('ACCOUNT_USAGE', 'DATA_TRANSFER_HISTORY'),
-('ACCOUNT_USAGE', 'REPLICATION_USAGE_HISTORY'),
-('ACCOUNT_USAGE', 'DATABASE_REPLICATION_USAGE_HISTORY'),
-('ACCOUNT_USAGE', 'REPLICATION_GROUP_USAGE_HISTORY'),
-('ACCOUNT_USAGE', 'REPLICATION_GROUP_REFRESH_HISTORY'),
--- Data loading
-('ACCOUNT_USAGE', 'LOAD_HISTORY'),
-('ACCOUNT_USAGE', 'COPY_HISTORY'),
-('ACCOUNT_USAGE', 'PIPE_USAGE_HISTORY'),
--- Features
-('ACCOUNT_USAGE', 'AUTOMATIC_CLUSTERING_HISTORY'),
-('ACCOUNT_USAGE', 'MATERIALIZED_VIEW_REFRESH_HISTORY'),
-('ACCOUNT_USAGE', 'SEARCH_OPTIMIZATION_HISTORY'),
-('ACCOUNT_USAGE', 'QUERY_ACCELERATION_HISTORY'),
-('ACCOUNT_USAGE', 'SERVERLESS_TASK_HISTORY'),
-('ACCOUNT_USAGE', 'TASK_HISTORY'),
-('ACCOUNT_USAGE', 'TASK_VERSIONS'),
-('ACCOUNT_USAGE', 'LOCK_WAIT_HISTORY'),
-('ACCOUNT_USAGE', 'OBJECT_DEPENDENCIES'),
-('ACCOUNT_USAGE', 'EVENT_USAGE_HISTORY'),
-('ACCOUNT_USAGE', 'HYBRID_TABLE_USAGE_HISTORY'),
--- Additional views
-('ACCOUNT_USAGE', 'CLASSES'),
-('ACCOUNT_USAGE', 'CLASS_INSTANCES'),
-('ACCOUNT_USAGE', 'ALERTS'),
-('ACCOUNT_USAGE', 'ALERT_HISTORY'),
-('ACCOUNT_USAGE', 'SERVICES'),
-('ACCOUNT_USAGE', 'COMPUTE_POOLS'),
-('ACCOUNT_USAGE', 'WAREHOUSES'),
-('ACCOUNT_USAGE', 'RESOURCE_MONITORS'),
-('ACCOUNT_USAGE', 'INTEGRATIONS'),
-('ACCOUNT_USAGE', 'EXTERNAL_ACCESS_HISTORY'),
-('ACCOUNT_USAGE', 'AGGREGATE_QUERY_HISTORY'),
-('ACCOUNT_USAGE', 'AGGREGATE_ACCESS_HISTORY'),
-('ACCOUNT_USAGE', 'CORTEX_FUNCTIONS_USAGE_HISTORY'),
-('ACCOUNT_USAGE', 'CORTEX_SEARCH_DAILY_USAGE_HISTORY'),
-('ACCOUNT_USAGE', 'SNOWPARK_CONTAINER_SERVICES_HISTORY'),
-('ACCOUNT_USAGE', 'SNOWPIPE_STREAMING_CLIENT_HISTORY'),
-('ACCOUNT_USAGE', 'DYNAMIC_TABLE_REFRESH_HISTORY'),
-('ACCOUNT_USAGE', 'DATA_CLASSIFICATION_LATEST'),
-('ACCOUNT_USAGE', 'DATA_METRIC_FUNCTION_REFERENCES'),
-('ACCOUNT_USAGE', 'PRIVACY_POLICIES'),
-('ACCOUNT_USAGE', 'PROJECTION_POLICIES'),
-('ACCOUNT_USAGE', 'AGGREGATION_POLICIES'),
-('ACCOUNT_USAGE', 'BACKUP_POLICIES'),
-('ACCOUNT_USAGE', 'BACKUPS'),
-('ACCOUNT_USAGE', 'BACKUP_SETS'),
+-- =============================================================================
+-- ACCOUNT_USAGE: APPEND_ONLY views (immutable event/history data)
+-- =============================================================================
+INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW, LOAD_STRATEGY, WATERMARK_COLUMN, UNIQUE_KEY_COLUMN) VALUES
+-- Query and access history
+('ACCOUNT_USAGE', 'QUERY_HISTORY', 'APPEND_ONLY', 'START_TIME', 'QUERY_ID'),
+('ACCOUNT_USAGE', 'ACCESS_HISTORY', 'APPEND_ONLY', 'QUERY_START_TIME', 'QUERY_ID'),
+('ACCOUNT_USAGE', 'QUERY_ATTRIBUTION_HISTORY', 'APPEND_ONLY', 'QUERY_START_TIME', 'QUERY_ID'),
+('ACCOUNT_USAGE', 'EXTERNAL_ACCESS_HISTORY', 'APPEND_ONLY', 'QUERY_ID', 'QUERY_ID'),
+('ACCOUNT_USAGE', 'AGGREGATE_QUERY_HISTORY', 'APPEND_ONLY', 'INTERVAL_START_TIME', NULL),
+('ACCOUNT_USAGE', 'AGGREGATE_ACCESS_HISTORY', 'APPEND_ONLY', 'INTERVAL_START_TIME', NULL),
+-- Login and session history
+('ACCOUNT_USAGE', 'LOGIN_HISTORY', 'APPEND_ONLY', 'EVENT_TIMESTAMP', 'EVENT_ID'),
+('ACCOUNT_USAGE', 'SESSIONS', 'APPEND_ONLY', 'CREATED_ON', 'SESSION_ID'),
+-- Warehouse history
+('ACCOUNT_USAGE', 'WAREHOUSE_EVENTS_HISTORY', 'APPEND_ONLY', 'TIMESTAMP', NULL),
+('ACCOUNT_USAGE', 'WAREHOUSE_LOAD_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'WAREHOUSE_METERING_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+-- Metering and billing
+('ACCOUNT_USAGE', 'METERING_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'METERING_DAILY_HISTORY', 'APPEND_ONLY', 'USAGE_DATE', NULL),
+-- Task history
+('ACCOUNT_USAGE', 'TASK_HISTORY', 'APPEND_ONLY', 'SCHEDULED_TIME', 'QUERY_ID'),
+('ACCOUNT_USAGE', 'COMPLETE_TASK_GRAPHS', 'APPEND_ONLY', 'SCHEDULED_TIME', NULL),
+('ACCOUNT_USAGE', 'SERVERLESS_TASK_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+-- Data loading history
+('ACCOUNT_USAGE', 'COPY_HISTORY', 'APPEND_ONLY', 'LAST_LOAD_TIME', NULL),
+('ACCOUNT_USAGE', 'LOAD_HISTORY', 'APPEND_ONLY', 'LAST_LOAD_TIME', NULL),
+('ACCOUNT_USAGE', 'PIPE_USAGE_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+-- Storage and usage daily
+('ACCOUNT_USAGE', 'DATABASE_STORAGE_USAGE_HISTORY', 'APPEND_ONLY', 'USAGE_DATE', NULL),
+('ACCOUNT_USAGE', 'STORAGE_USAGE', 'APPEND_ONLY', 'USAGE_DATE', NULL),
+('ACCOUNT_USAGE', 'STAGE_STORAGE_USAGE_HISTORY', 'APPEND_ONLY', 'USAGE_DATE', NULL),
+-- Replication history
+('ACCOUNT_USAGE', 'DATABASE_REPLICATION_USAGE_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'REPLICATION_GROUP_USAGE_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'REPLICATION_GROUP_REFRESH_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'REPLICATION_USAGE_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+-- Alert history
+('ACCOUNT_USAGE', 'ALERT_HISTORY', 'APPEND_ONLY', 'SCHEDULED_TIME', NULL),
+-- Clustering, search, materialized view refresh
+('ACCOUNT_USAGE', 'AUTOMATIC_CLUSTERING_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'SEARCH_OPTIMIZATION_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'MATERIALIZED_VIEW_REFRESH_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+-- Data transfer
+('ACCOUNT_USAGE', 'DATA_TRANSFER_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+-- Dynamic table refresh
+('ACCOUNT_USAGE', 'DYNAMIC_TABLE_REFRESH_HISTORY', 'APPEND_ONLY', 'REFRESH_START_TIME', NULL),
+-- Cortex and AI usage
+('ACCOUNT_USAGE', 'CORTEX_FUNCTIONS_USAGE_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'CORTEX_SEARCH_DAILY_USAGE_HISTORY', 'APPEND_ONLY', 'USAGE_DATE', NULL),
+-- Container and streaming
+('ACCOUNT_USAGE', 'EVENT_USAGE_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'SNOWPARK_CONTAINER_SERVICES_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'SNOWPIPE_STREAMING_CLIENT_HISTORY', 'APPEND_ONLY', 'EVENT_TIMESTAMP', NULL),
+-- Other history
+('ACCOUNT_USAGE', 'HYBRID_TABLE_USAGE_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'QUERY_ACCELERATION_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'LOCK_WAIT_HISTORY', 'APPEND_ONLY', 'REQUESTED_AT', NULL),
+('ACCOUNT_USAGE', 'INGRESS_NETWORK_ACCESS_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'TABLE_QUERY_PRUNING_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'TABLE_PRUNING_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'TABLE_DML_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'CATALOG_LINKED_DATABASE_USAGE_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL);
+
+-- =============================================================================
+-- ACCOUNT_USAGE: SOFT_DELETE_MUTABLE views (catalog objects that change)
+-- =============================================================================
+INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW, LOAD_STRATEGY, WATERMARK_COLUMN, UNIQUE_KEY_COLUMN) VALUES
+-- Core catalog objects
+('ACCOUNT_USAGE', 'COLUMNS', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'COLUMN_ID'),
+('ACCOUNT_USAGE', 'TABLES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'TABLE_ID'),
+('ACCOUNT_USAGE', 'VIEWS', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'TABLE_ID'),
+('ACCOUNT_USAGE', 'DATABASES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'DATABASE_ID'),
+('ACCOUNT_USAGE', 'SCHEMATA', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'SCHEMA_ID'),
+('ACCOUNT_USAGE', 'FUNCTIONS', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'FUNCTION_ID'),
+('ACCOUNT_USAGE', 'PROCEDURES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', NULL),
+('ACCOUNT_USAGE', 'SEQUENCES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'SEQUENCE_ID'),
+('ACCOUNT_USAGE', 'FILE_FORMATS', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'FILE_FORMAT_ID'),
+('ACCOUNT_USAGE', 'PIPES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'PIPE_ID'),
+('ACCOUNT_USAGE', 'STAGES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'STAGE_ID'),
+-- Policy objects
+('ACCOUNT_USAGE', 'MASKING_POLICIES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'POLICY_ID'),
+('ACCOUNT_USAGE', 'ROW_ACCESS_POLICIES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'POLICY_ID'),
+('ACCOUNT_USAGE', 'PRIVACY_POLICIES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'POLICY_ID'),
+('ACCOUNT_USAGE', 'PROJECTION_POLICIES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'POLICY_ID'),
+('ACCOUNT_USAGE', 'AGGREGATION_POLICIES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'POLICY_ID'),
+('ACCOUNT_USAGE', 'PASSWORD_POLICIES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'ID'),
+('ACCOUNT_USAGE', 'SESSION_POLICIES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'ID'),
+('ACCOUNT_USAGE', 'BACKUP_POLICIES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'ID'),
+('ACCOUNT_USAGE', 'NETWORK_POLICIES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'ID'),
+('ACCOUNT_USAGE', 'NETWORK_RULES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'ID'),
+-- Security objects
+('ACCOUNT_USAGE', 'TAGS', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'TAG_ID'),
+('ACCOUNT_USAGE', 'TABLE_CONSTRAINTS', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'CONSTRAINT_ID'),
+('ACCOUNT_USAGE', 'REFERENTIAL_CONSTRAINTS', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'CONSTRAINT_ID'),
+('ACCOUNT_USAGE', 'USERS', 'SOFT_DELETE_MUTABLE', 'DELETED_ON', 'USER_ID'),
+('ACCOUNT_USAGE', 'ROLES', 'SOFT_DELETE_MUTABLE', 'DELETED_ON', 'ROLE_ID'),
+-- Service objects
+('ACCOUNT_USAGE', 'CLASSES', 'SOFT_DELETE_MUTABLE', 'DELETED', 'ID'),
+('ACCOUNT_USAGE', 'CLASS_INSTANCES', 'SOFT_DELETE_MUTABLE', 'DELETED', 'ID'),
+('ACCOUNT_USAGE', 'SERVICES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'SERVICE_ID'),
+('ACCOUNT_USAGE', 'COMPUTE_POOLS', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', NULL),
+('ACCOUNT_USAGE', 'BACKUP_SETS', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'ID'),
+('ACCOUNT_USAGE', 'BACKUPS', 'SOFT_DELETE_MUTABLE', 'DELETED', 'ID'),
+('ACCOUNT_USAGE', 'TASK_VERSIONS', 'SOFT_DELETE_MUTABLE', 'GRAPH_VERSION_CREATED_ON', NULL),
+('ACCOUNT_USAGE', 'DATA_CLASSIFICATION_LATEST', 'SOFT_DELETE_MUTABLE', 'LAST_CLASSIFIED_ON', 'TABLE_ID');
+
+-- =============================================================================
+-- ACCOUNT_USAGE: FULL_COMPARE views (no reliable watermark or key)
+-- =============================================================================
+INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW, LOAD_STRATEGY) VALUES
+('ACCOUNT_USAGE', 'GRANTS_TO_ROLES', 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'GRANTS_TO_USERS', 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'OBJECT_DEPENDENCIES', 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'POLICY_REFERENCES', 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'TAG_REFERENCES', 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'DATA_METRIC_FUNCTION_REFERENCES', 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'TABLE_STORAGE_METRICS', 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'RESOURCE_MONITORS', 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'WAREHOUSES', 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'INTEGRATIONS', 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'STREAMS', 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'TASKS', 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'ALERTS', 'FULL_COMPARE');
+
+-- =============================================================================
 -- ORGANIZATION_USAGE views
-('ORGANIZATION_USAGE', 'WAREHOUSE_METERING_HISTORY'),
-('ORGANIZATION_USAGE', 'STORAGE_DAILY_HISTORY'),
-('ORGANIZATION_USAGE', 'DATA_TRANSFER_HISTORY'),
-('ORGANIZATION_USAGE', 'METERING_DAILY_HISTORY'),
-('ORGANIZATION_USAGE', 'RATE_SHEET_DAILY'),
-('ORGANIZATION_USAGE', 'REMAINING_BALANCE_DAILY'),
-('ORGANIZATION_USAGE', 'USAGE_IN_CURRENCY_DAILY'),
-('ORGANIZATION_USAGE', 'CONTRACT_ITEMS'),
-('ORGANIZATION_USAGE', 'ACCOUNTS'),
-('ORGANIZATION_USAGE', 'REGION_GROUPS'),
-('ORGANIZATION_USAGE', 'REGIONS'),
-('ORGANIZATION_USAGE', 'REPLICATION_GROUP_USAGE_HISTORY'),
-('ORGANIZATION_USAGE', 'DATABASE_REPLICATION_USAGE_HISTORY'),
-('ORGANIZATION_USAGE', 'AUTOMATIC_CLUSTERING_HISTORY'),
-('ORGANIZATION_USAGE', 'MATERIALIZED_VIEW_REFRESH_HISTORY'),
-('ORGANIZATION_USAGE', 'SEARCH_OPTIMIZATION_HISTORY'),
-('ORGANIZATION_USAGE', 'SERVERLESS_TASK_HISTORY'),
-('ORGANIZATION_USAGE', 'QUERY_ACCELERATION_HISTORY'),
-('ORGANIZATION_USAGE', 'PIPE_USAGE_HISTORY'),
-('ORGANIZATION_USAGE', 'MARKETPLACE_DISBURSEMENT_REPORT'),
-('ORGANIZATION_USAGE', 'MARKETPLACE_PAID_USAGE_DAILY'),
--- DATA_SHARING_USAGE views (for accounts with data sharing enabled)
-('DATA_SHARING_USAGE', 'LISTING_EVENTS_DAILY'),
-('DATA_SHARING_USAGE', 'LISTING_TELEMETRY_DAILY'),
-('DATA_SHARING_USAGE', 'MARKETPLACE_PAID_USAGE_DAILY'),
--- READER_ACCOUNT_USAGE views (for accounts with reader accounts)
-('READER_ACCOUNT_USAGE', 'LOGIN_HISTORY'),
-('READER_ACCOUNT_USAGE', 'QUERY_HISTORY'),
-('READER_ACCOUNT_USAGE', 'RESOURCE_MONITORS'),
-('READER_ACCOUNT_USAGE', 'STORAGE_USAGE'),
-('READER_ACCOUNT_USAGE', 'WAREHOUSE_METERING_HISTORY');
+-- DEACTIVATED: These cross-org views return 0 rows but take 3-8 min each to
+-- query. They waste ~20 min per run. Re-activate when org-level data exists.
+-- To re-activate: UPDATE VIEW_REGISTRY SET IS_ACTIVE = TRUE WHERE SOURCE_SCHEMA = 'ORGANIZATION_USAGE';
+-- =============================================================================
+INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW, IS_ACTIVE, LOAD_STRATEGY, WATERMARK_COLUMN, UNIQUE_KEY_COLUMN) VALUES
+('ORGANIZATION_USAGE', 'WAREHOUSE_METERING_HISTORY', FALSE, 'APPEND_ONLY', 'START_TIME', NULL),
+('ORGANIZATION_USAGE', 'STORAGE_DAILY_HISTORY', FALSE, 'APPEND_ONLY', 'USAGE_DATE', NULL),
+('ORGANIZATION_USAGE', 'DATA_TRANSFER_HISTORY', FALSE, 'APPEND_ONLY', 'USAGE_DATE', NULL),
+('ORGANIZATION_USAGE', 'METERING_DAILY_HISTORY', FALSE, 'APPEND_ONLY', 'USAGE_DATE', NULL),
+('ORGANIZATION_USAGE', 'RATE_SHEET_DAILY', FALSE, 'APPEND_ONLY', 'DATE', NULL),
+('ORGANIZATION_USAGE', 'REMAINING_BALANCE_DAILY', FALSE, 'APPEND_ONLY', 'DATE', NULL),
+('ORGANIZATION_USAGE', 'USAGE_IN_CURRENCY_DAILY', FALSE, 'APPEND_ONLY', 'USAGE_DATE', NULL),
+('ORGANIZATION_USAGE', 'CONTRACT_ITEMS', FALSE, 'APPEND_ONLY', 'CONTRACT_MODIFIED_DATE', NULL),
+('ORGANIZATION_USAGE', 'ACCOUNTS', FALSE, 'SOFT_DELETE_MUTABLE', 'ALTERED_ON', 'ACCOUNT_NAME'),
+('ORGANIZATION_USAGE', 'REPLICATION_GROUP_USAGE_HISTORY', FALSE, 'APPEND_ONLY', 'USAGE_DATE', NULL),
+('ORGANIZATION_USAGE', 'DATABASE_REPLICATION_USAGE_HISTORY', FALSE, 'APPEND_ONLY', 'USAGE_DATE', NULL),
+('ORGANIZATION_USAGE', 'AUTOMATIC_CLUSTERING_HISTORY', FALSE, 'APPEND_ONLY', 'USAGE_DATE', NULL),
+('ORGANIZATION_USAGE', 'MATERIALIZED_VIEW_REFRESH_HISTORY', FALSE, 'APPEND_ONLY', 'USAGE_DATE', NULL),
+('ORGANIZATION_USAGE', 'SEARCH_OPTIMIZATION_HISTORY', FALSE, 'APPEND_ONLY', 'USAGE_DATE', NULL),
+('ORGANIZATION_USAGE', 'SERVERLESS_TASK_HISTORY', FALSE, 'APPEND_ONLY', 'START_TIME', NULL),
+('ORGANIZATION_USAGE', 'QUERY_ACCELERATION_HISTORY', FALSE, 'APPEND_ONLY', 'USAGE_DATE', NULL),
+('ORGANIZATION_USAGE', 'PIPE_USAGE_HISTORY', FALSE, 'APPEND_ONLY', 'USAGE_DATE', NULL),
+('ORGANIZATION_USAGE', 'MARKETPLACE_DISBURSEMENT_REPORT', FALSE, 'APPEND_ONLY', 'EVENT_DATE', NULL),
+('ORGANIZATION_USAGE', 'MARKETPLACE_PAID_USAGE_DAILY', FALSE, 'APPEND_ONLY', 'USAGE_DATE', NULL);
+
+INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW, IS_ACTIVE, LOAD_STRATEGY) VALUES
+('ORGANIZATION_USAGE', 'REGION_GROUPS', FALSE, 'FULL_COMPARE'),
+('ORGANIZATION_USAGE', 'REGIONS', FALSE, 'FULL_COMPARE');
+
+-- =============================================================================
+-- DATA_SHARING_USAGE views
+-- DEACTIVATED: No data sharing activity in this account. Re-activate when needed.
+-- =============================================================================
+INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW, IS_ACTIVE, LOAD_STRATEGY, WATERMARK_COLUMN) VALUES
+('DATA_SHARING_USAGE', 'LISTING_EVENTS_DAILY', FALSE, 'APPEND_ONLY', 'EVENT_DATE'),
+('DATA_SHARING_USAGE', 'LISTING_TELEMETRY_DAILY', FALSE, 'APPEND_ONLY', 'EVENT_DATE'),
+('DATA_SHARING_USAGE', 'MARKETPLACE_PAID_USAGE_DAILY', FALSE, 'APPEND_ONLY', 'USAGE_DATE');
+
+-- =============================================================================
+-- READER_ACCOUNT_USAGE views
+-- DEACTIVATED: No reader accounts configured. Re-activate when needed.
+-- =============================================================================
+INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW, IS_ACTIVE, LOAD_STRATEGY, WATERMARK_COLUMN, UNIQUE_KEY_COLUMN) VALUES
+('READER_ACCOUNT_USAGE', 'LOGIN_HISTORY', FALSE, 'APPEND_ONLY', 'EVENT_TIMESTAMP', 'EVENT_ID'),
+('READER_ACCOUNT_USAGE', 'QUERY_HISTORY', FALSE, 'APPEND_ONLY', 'START_TIME', 'QUERY_ID'),
+('READER_ACCOUNT_USAGE', 'STORAGE_USAGE', FALSE, 'APPEND_ONLY', 'USAGE_DATE', NULL),
+('READER_ACCOUNT_USAGE', 'WAREHOUSE_METERING_HISTORY', FALSE, 'APPEND_ONLY', 'START_TIME', NULL);
+
+INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW, IS_ACTIVE, LOAD_STRATEGY) VALUES
+('READER_ACCOUNT_USAGE', 'RESOURCE_MONITORS', FALSE, 'FULL_COMPARE');
 
 -- =============================================================================
 -- PROCEDURE: LOAD_VIEW_ARCHIVE
--- Simplified SCD Type 2 load using surrogate key and row hash
--- No PK mapping needed - works with ANY view
+-- Optimized SCD Type 2 load with 3-strategy branching
+--
+-- APPEND_ONLY: Only loads rows beyond the last watermark. No UPDATE needed.
+--   Ideal for QUERY_HISTORY, ACCESS_HISTORY, etc. where rows never change.
+--   ~99% reduction in compute for large append-only tables.
+--
+-- SOFT_DELETE_MUTABLE: Full SCD2 with temp table (single source scan).
+--   For COLUMNS, TABLES, VIEWS, etc. that can be altered or dropped.
+--
+-- FULL_COMPARE: Full hash comparison fallback.
+--   For GRANTS_TO_ROLES, TAG_REFERENCES, etc. with no reliable watermark.
+--
+-- All strategies compute SHA-256 row hash for WORM compliance.
 -- =============================================================================
 
 CREATE OR REPLACE PROCEDURE TEMPORAL_ARCHIVE.ARCHIVE.LOAD_VIEW_ARCHIVE(
@@ -215,28 +307,36 @@ DECLARE
     v_update_sql VARCHAR;
     v_rows_inserted INTEGER DEFAULT 0;
     v_rows_updated INTEGER DEFAULT 0;
+    v_temp_table VARCHAR;
+    v_max_id INTEGER DEFAULT 0;
+    v_load_strategy VARCHAR DEFAULT 'FULL_COMPARE';
+    v_watermark_column VARCHAR DEFAULT NULL;
+    v_last_watermark VARCHAR DEFAULT NULL;
+    v_new_watermark VARCHAR DEFAULT NULL;
 BEGIN
-    -- Copy parameters to local variables
     v_schema := p_source_schema;
     v_view := p_source_view;
     v_target_table := v_view || '_ARCHIVE';
     v_target_schema := v_schema;
     v_source_fqn := 'SNOWFLAKE.' || v_schema || '.' || v_view;
     v_target_fqn := 'TEMPORAL_ARCHIVE.' || v_target_schema || '.' || v_target_table;
+    v_temp_table := 'TEMPORAL_ARCHIVE.' || v_target_schema || '.' || v_target_table || '_STG';
     
-    -- Validate source view exists before attempting to load
+    -- Get load strategy from registry
+    SELECT LOAD_STRATEGY, WATERMARK_COLUMN 
+    INTO :v_load_strategy, :v_watermark_column
+    FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY
+    WHERE SOURCE_SCHEMA = :v_schema AND SOURCE_VIEW = :v_view AND IS_ACTIVE = TRUE;
+    
+    -- Validate source view exists
     SELECT COUNT(*) INTO :v_source_exists
     FROM SNOWFLAKE.INFORMATION_SCHEMA.VIEWS
-    WHERE TABLE_SCHEMA = :v_schema
-      AND TABLE_NAME = :v_view;
+    WHERE TABLE_SCHEMA = :v_schema AND TABLE_NAME = :v_view;
     
     IF (v_source_exists = 0) THEN
-        -- Source view does not exist - return warning without failing
         RETURN OBJECT_CONSTRUCT(
-            'source', v_source_fqn,
-            'target', v_target_fqn,
-            'status', 'skipped',
-            'reason', 'Source view does not exist or is not accessible',
+            'source', v_source_fqn, 'target', v_target_fqn,
+            'status', 'skipped', 'reason', 'Source view does not exist or is not accessible',
             'timestamp', CURRENT_TIMESTAMP()::VARCHAR
         );
     END IF;
@@ -244,15 +344,15 @@ BEGIN
     -- Check if target table exists
     SELECT COUNT(*) INTO :v_table_exists
     FROM TEMPORAL_ARCHIVE.INFORMATION_SCHEMA.TABLES
-    WHERE TABLE_SCHEMA = :v_target_schema
-      AND TABLE_NAME = :v_target_table;
+    WHERE TABLE_SCHEMA = :v_target_schema AND TABLE_NAME = :v_target_table;
     
-    -- Create target table if not exists
+    -- =========================================================================
+    -- INITIAL LOAD (same for all strategies)
+    -- Creates target table with CTAS, computes hash for every row.
+    -- =========================================================================
     IF (v_table_exists = 0) THEN
-        -- Create schema if needed
         EXECUTE IMMEDIATE 'CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.' || v_target_schema;
         
-        -- Create table with surrogate key and SCD columns
         -- Use CTE to compute OBJECT_CONSTRUCT(*) in SELECT clause (required by Snowflake),
         -- then hash it in the outer query and exclude the helper column
         v_create_sql := 'CREATE TABLE ' || v_target_fqn || ' AS 
@@ -272,97 +372,239 @@ BEGIN
             FROM src_with_hash';
         
         EXECUTE IMMEDIATE v_create_sql;
-        
-        -- =====================================================================
-        -- INDEX RECOMMENDATIONS (for query performance on large tables):
-        -- Snowflake uses micro-partitions and automatic clustering, but you can
-        -- improve query performance with clustering keys on frequently filtered columns.
-        -- 
-        -- Recommended clustering keys for archive tables:
-        --   ALTER TABLE <table> CLUSTER BY ("_IS_CURRENT", "_VALID_FROM");
-        -- 
-        -- This helps queries that filter on current records (WHERE "_IS_CURRENT" = TRUE)
-        -- which is the most common query pattern.
-        -- 
-        -- For very large tables (>1TB), consider:
-        --   ALTER TABLE <table> CLUSTER BY ("_IS_CURRENT", "_LOADED_AT");
-        -- =====================================================================
-        
         SELECT COUNT(*) INTO :v_rows_inserted FROM IDENTIFIER(:v_target_fqn);
         
+        -- Set initial watermark
+        IF (v_watermark_column IS NOT NULL AND v_rows_inserted > 0) THEN
+            BEGIN
+                LET wm_rs RESULTSET := (EXECUTE IMMEDIATE 
+                    'SELECT MAX("' || v_watermark_column || '")::VARCHAR FROM ' || v_target_fqn);
+                LET wm_c CURSOR FOR wm_rs;
+                OPEN wm_c;
+                FETCH wm_c INTO v_new_watermark;
+                CLOSE wm_c;
+                IF (v_new_watermark IS NOT NULL) THEN
+                    INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.WATERMARK_STATE 
+                        (SOURCE_SCHEMA, SOURCE_VIEW, LAST_WATERMARK_VALUE, LAST_LOADED_AT, ROWS_LOADED)
+                    VALUES (:v_schema, :v_view, :v_new_watermark, CURRENT_TIMESTAMP(), :v_rows_inserted);
+                END IF;
+            EXCEPTION WHEN OTHER THEN NULL;
+            END;
+        END IF;
+        
         RETURN OBJECT_CONSTRUCT(
-            'source', v_source_fqn,
-            'target', v_target_fqn,
-            'action', 'INITIAL_LOAD',
-            'rows_inserted', v_rows_inserted,
-            'rows_updated', 0,
-            'status', 'success',
-            'timestamp', CURRENT_TIMESTAMP()::VARCHAR
+            'source', v_source_fqn, 'target', v_target_fqn,
+            'action', 'INITIAL_LOAD', 'strategy', v_load_strategy,
+            'rows_inserted', v_rows_inserted, 'rows_updated', 0,
+            'status', 'success', 'timestamp', CURRENT_TIMESTAMP()::VARCHAR
         );
     END IF;
     
-    -- Table exists - do incremental SCD Type 2 load
+    -- =========================================================================
+    -- INCREMENTAL LOAD - branch by strategy
+    -- =========================================================================
     
-    -- Step 1: Close records that have changed (update _IS_CURRENT = FALSE)
-    -- Compare hashes - if source hash not in target's current hashes, mark as closed
-    -- Use subquery to compute OBJECT_CONSTRUCT(*) in SELECT clause (required by Snowflake)
+    -- Get last watermark value
+    IF (v_watermark_column IS NOT NULL) THEN
+        BEGIN
+            SELECT LAST_WATERMARK_VALUE INTO :v_last_watermark
+            FROM TEMPORAL_ARCHIVE.ARCHIVE.WATERMARK_STATE
+            WHERE SOURCE_SCHEMA = :v_schema AND SOURCE_VIEW = :v_view;
+        EXCEPTION WHEN OTHER THEN
+            v_last_watermark := NULL;
+        END;
+    END IF;
+    
+    -- Pre-compute max archive ID (avoids correlated subquery per row in INSERT)
+    LET id_rs RESULTSET := (SELECT COALESCE(MAX("_ARCHIVE_ID"), 0) AS max_id 
+                            FROM IDENTIFIER(:v_target_fqn));
+    LET id_c CURSOR FOR id_rs;
+    OPEN id_c;
+    FETCH id_c INTO v_max_id;
+    CLOSE id_c;
+    
+    -- =======================================================================
+    -- STRATEGY: APPEND_ONLY
+    -- Rows are immutable once written. Only INSERT new rows beyond watermark.
+    -- No UPDATE needed (rows never change, never deleted from source).
+    -- Hash is still computed for WORM compliance on every new row.
+    -- =======================================================================
+    IF (v_load_strategy = 'APPEND_ONLY' AND v_last_watermark IS NOT NULL 
+        AND v_watermark_column IS NOT NULL) THEN
+        
+        -- Materialize only NEW rows from source (delta beyond watermark)
+        EXECUTE IMMEDIATE '
+            CREATE OR REPLACE TEMPORARY TABLE ' || v_temp_table || ' AS
+            WITH src_with_hash AS (
+                SELECT *, OBJECT_CONSTRUCT(*) AS _obj 
+                FROM ' || v_source_fqn || '
+                WHERE "' || v_watermark_column || '" > ''' || v_last_watermark || '''::TIMESTAMP_NTZ
+            )
+            SELECT 
+                * EXCLUDE _obj,
+                SHA2(TO_JSON(_obj), 256) AS "_SRC_ROW_HASH"
+            FROM src_with_hash';
+        
+        -- INSERT new rows (no UPDATE needed for append-only data)
+        v_insert_sql := '
+            INSERT INTO ' || v_target_fqn || '
+            SELECT 
+                ' || v_max_id || ' + ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS "_ARCHIVE_ID",
+                * EXCLUDE "_SRC_ROW_HASH",
+                "_SRC_ROW_HASH" AS "_ROW_HASH",
+                CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_LOADED_AT",
+                ''SNOWFLAKE_' || v_schema || ''' AS "_SOURCE_SYSTEM",
+                ''' || v_view || ''' AS "_SOURCE_TABLE",
+                TRUE AS "_IS_CURRENT",
+                CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_VALID_FROM",
+                ''9999-12-31 23:59:59''::TIMESTAMP_NTZ AS "_VALID_TO"
+            FROM ' || v_temp_table;
+        
+        EXECUTE IMMEDIATE v_insert_sql;
+        v_rows_inserted := SQLROWCOUNT;
+        
+        -- Update watermark to highest value in this batch
+        BEGIN
+            LET wm_rs2 RESULTSET := (EXECUTE IMMEDIATE 
+                'SELECT MAX("' || v_watermark_column || '")::VARCHAR FROM ' || v_temp_table);
+            LET wm_c2 CURSOR FOR wm_rs2;
+            OPEN wm_c2;
+            FETCH wm_c2 INTO v_new_watermark;
+            CLOSE wm_c2;
+            IF (v_new_watermark IS NOT NULL) THEN
+                MERGE INTO TEMPORAL_ARCHIVE.ARCHIVE.WATERMARK_STATE ws
+                USING (SELECT :v_schema AS s, :v_view AS v) src 
+                    ON ws.SOURCE_SCHEMA = src.s AND ws.SOURCE_VIEW = src.v
+                WHEN MATCHED THEN UPDATE SET 
+                    LAST_WATERMARK_VALUE = :v_new_watermark, 
+                    LAST_LOADED_AT = CURRENT_TIMESTAMP(), 
+                    ROWS_LOADED = :v_rows_inserted
+                WHEN NOT MATCHED THEN INSERT 
+                    (SOURCE_SCHEMA, SOURCE_VIEW, LAST_WATERMARK_VALUE, LAST_LOADED_AT, ROWS_LOADED) 
+                    VALUES (:v_schema, :v_view, :v_new_watermark, CURRENT_TIMESTAMP(), :v_rows_inserted);
+            END IF;
+        EXCEPTION WHEN OTHER THEN NULL;
+        END;
+        
+        EXECUTE IMMEDIATE 'DROP TABLE IF EXISTS ' || v_temp_table;
+        
+        RETURN OBJECT_CONSTRUCT(
+            'source', v_source_fqn, 'target', v_target_fqn,
+            'action', 'INCREMENTAL_LOAD', 'strategy', 'APPEND_ONLY',
+            'rows_inserted', v_rows_inserted, 'rows_updated', 0,
+            'status', 'success', 'timestamp', CURRENT_TIMESTAMP()::VARCHAR
+        );
+    END IF;
+    
+    -- =======================================================================
+    -- STRATEGY: SOFT_DELETE_MUTABLE and FULL_COMPARE
+    -- Both use full SCD2 logic with temp table single-scan optimization.
+    -- Materialize all source hashes once, then UPDATE + INSERT.
+    -- Also used as fallback when watermark is not yet set.
+    -- =======================================================================
+    
+    -- Materialize source hashes once into temp table (single scan of source)
+    EXECUTE IMMEDIATE '
+        CREATE OR REPLACE TEMPORARY TABLE ' || v_temp_table || ' AS
+        WITH src_with_hash AS (
+            SELECT *, OBJECT_CONSTRUCT(*) AS _obj FROM ' || v_source_fqn || '
+        )
+        SELECT 
+            * EXCLUDE _obj,
+            SHA2(TO_JSON(_obj), 256) AS "_SRC_ROW_HASH"
+        FROM src_with_hash';
+    
+    -- Step 1: Close records whose hash is no longer in source
+    -- Uses NOT EXISTS instead of NOT IN for better performance
     v_update_sql := '
         UPDATE ' || v_target_fqn || ' tgt
         SET "_IS_CURRENT" = FALSE,
             "_VALID_TO" = CURRENT_TIMESTAMP()::TIMESTAMP_NTZ
         WHERE tgt."_IS_CURRENT" = TRUE
-          AND tgt."_ROW_HASH" NOT IN (
-              SELECT SHA2(TO_JSON(_obj), 256) 
-              FROM (SELECT OBJECT_CONSTRUCT(*) AS _obj FROM ' || v_source_fqn || ')
+          AND NOT EXISTS (
+              SELECT 1 FROM ' || v_temp_table || ' src
+              WHERE src."_SRC_ROW_HASH" = tgt."_ROW_HASH"
           )';
     
     EXECUTE IMMEDIATE v_update_sql;
     v_rows_updated := SQLROWCOUNT;
     
-    -- Step 2: Insert new/changed records
-    -- Only insert rows whose hash doesn't exist in target's current records
-    -- Use CTE to compute OBJECT_CONSTRUCT(*) in SELECT clause (required by Snowflake)
+    -- Re-fetch max ID after closures
+    LET id_rs2 RESULTSET := (SELECT COALESCE(MAX("_ARCHIVE_ID"), 0) AS max_id 
+                             FROM IDENTIFIER(:v_target_fqn));
+    LET id_c2 CURSOR FOR id_rs2;
+    OPEN id_c2;
+    FETCH id_c2 INTO v_max_id;
+    CLOSE id_c2;
+    
+    -- Step 2: Insert rows whose hash is not in current target
     v_insert_sql := '
         INSERT INTO ' || v_target_fqn || '
-        WITH src_with_hash AS (
-            SELECT *, OBJECT_CONSTRUCT(*) AS _obj FROM ' || v_source_fqn || '
-        )
         SELECT 
-            (SELECT COALESCE(MAX("_ARCHIVE_ID"), 0) FROM ' || v_target_fqn || ') + 
-                ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS "_ARCHIVE_ID",
-            * EXCLUDE _obj,
-            SHA2(TO_JSON(_obj), 256) AS "_ROW_HASH",
+            ' || v_max_id || ' + ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS "_ARCHIVE_ID",
+            * EXCLUDE "_SRC_ROW_HASH",
+            "_SRC_ROW_HASH" AS "_ROW_HASH",
             CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_LOADED_AT",
             ''SNOWFLAKE_' || v_schema || ''' AS "_SOURCE_SYSTEM",
             ''' || v_view || ''' AS "_SOURCE_TABLE",
             TRUE AS "_IS_CURRENT",
             CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_VALID_FROM",
             ''9999-12-31 23:59:59''::TIMESTAMP_NTZ AS "_VALID_TO"
-        FROM src_with_hash
-        WHERE SHA2(TO_JSON(_obj), 256) NOT IN (
-            SELECT "_ROW_HASH" FROM ' || v_target_fqn || ' WHERE "_IS_CURRENT" = TRUE
+        FROM ' || v_temp_table || ' src
+        WHERE NOT EXISTS (
+            SELECT 1 FROM ' || v_target_fqn || ' tgt
+            WHERE tgt."_IS_CURRENT" = TRUE
+              AND tgt."_ROW_HASH" = src."_SRC_ROW_HASH"
         )';
     
     EXECUTE IMMEDIATE v_insert_sql;
     v_rows_inserted := SQLROWCOUNT;
     
+    -- Update watermark if applicable
+    IF (v_watermark_column IS NOT NULL) THEN
+        BEGIN
+            LET wm_rs3 RESULTSET := (EXECUTE IMMEDIATE 
+                'SELECT MAX("' || v_watermark_column || '")::VARCHAR FROM ' || v_temp_table);
+            LET wm_c3 CURSOR FOR wm_rs3;
+            OPEN wm_c3;
+            FETCH wm_c3 INTO v_new_watermark;
+            CLOSE wm_c3;
+            IF (v_new_watermark IS NOT NULL) THEN
+                MERGE INTO TEMPORAL_ARCHIVE.ARCHIVE.WATERMARK_STATE ws
+                USING (SELECT :v_schema AS s, :v_view AS v) src 
+                    ON ws.SOURCE_SCHEMA = src.s AND ws.SOURCE_VIEW = src.v
+                WHEN MATCHED THEN UPDATE SET 
+                    LAST_WATERMARK_VALUE = :v_new_watermark, 
+                    LAST_LOADED_AT = CURRENT_TIMESTAMP(), 
+                    ROWS_LOADED = :v_rows_inserted
+                WHEN NOT MATCHED THEN INSERT 
+                    (SOURCE_SCHEMA, SOURCE_VIEW, LAST_WATERMARK_VALUE, LAST_LOADED_AT, ROWS_LOADED) 
+                    VALUES (:v_schema, :v_view, :v_new_watermark, CURRENT_TIMESTAMP(), :v_rows_inserted);
+            END IF;
+        EXCEPTION WHEN OTHER THEN NULL;
+        END;
+    END IF;
+    
+    EXECUTE IMMEDIATE 'DROP TABLE IF EXISTS ' || v_temp_table;
+    
     RETURN OBJECT_CONSTRUCT(
-        'source', v_source_fqn,
-        'target', v_target_fqn,
-        'action', 'INCREMENTAL_LOAD',
-        'rows_inserted', v_rows_inserted,
-        'rows_updated', v_rows_updated,
-        'status', 'success',
-        'timestamp', CURRENT_TIMESTAMP()::VARCHAR
+        'source', v_source_fqn, 'target', v_target_fqn,
+        'action', 'INCREMENTAL_LOAD', 'strategy', COALESCE(v_load_strategy, 'FULL_COMPARE'),
+        'rows_inserted', v_rows_inserted, 'rows_updated', v_rows_updated,
+        'status', 'success', 'timestamp', CURRENT_TIMESTAMP()::VARCHAR
     );
     
 EXCEPTION
     WHEN OTHER THEN
+        -- Cleanup temp table on error
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP TABLE IF EXISTS ' || v_temp_table;
+        EXCEPTION WHEN OTHER THEN NULL;
+        END;
         RETURN OBJECT_CONSTRUCT(
-            'source', v_source_fqn,
-            'target', v_target_fqn,
-            'status', 'error',
-            'error', SQLERRM,
+            'source', v_source_fqn, 'target', v_target_fqn,
+            'status', 'error', 'error', SQLERRM,
+            'strategy', COALESCE(v_load_strategy, 'UNKNOWN'),
             'timestamp', CURRENT_TIMESTAMP()::VARCHAR
         );
 END;
@@ -460,6 +702,7 @@ DECLARE
     total_inserted INTEGER DEFAULT 0;
     error_count INTEGER DEFAULT 0;
     success_count INTEGER DEFAULT 0;
+    skipped_count INTEGER DEFAULT 0;
     views_processed INTEGER DEFAULT 0;
     v_source_schema VARCHAR;
     v_source_view VARCHAR;
@@ -479,7 +722,6 @@ BEGIN
     FETCH cur INTO v_source_schema, v_source_view;
     WHILE (v_source_schema IS NOT NULL) DO
         
-        -- Call the simplified load procedure
         CALL TEMPORAL_ARCHIVE.ARCHIVE.LOAD_VIEW_ARCHIVE(
             :v_source_schema,
             :v_source_view
@@ -492,6 +734,8 @@ BEGIN
             total_updated := total_updated + COALESCE(table_result:rows_updated::INTEGER, 0);
             total_inserted := total_inserted + COALESCE(table_result:rows_inserted::INTEGER, 0);
             success_count := success_count + 1;
+        ELSEIF (table_result:status = 'skipped') THEN
+            skipped_count := skipped_count + 1;
         ELSE
             error_count := error_count + 1;
         END IF;
@@ -530,6 +774,7 @@ BEGIN
         'views_in_registry', views_processed,
         'views_processed', views_processed,
         'success_count', success_count,
+        'skipped_count', skipped_count,
         'total_updated', total_updated,
         'total_inserted', total_inserted,
         'error_count', error_count,
@@ -566,7 +811,16 @@ ALTER TASK TEMPORAL_ARCHIVE.ARCHIVE.TASK_SCD_LOAD_EVENING RESUME;
 
 SHOW TASKS IN SCHEMA TEMPORAL_ARCHIVE.ARCHIVE;
 
--- Show how many views are in the registry
+-- Show strategy distribution
+SELECT 
+    LOAD_STRATEGY,
+    COUNT(*) AS VIEW_COUNT
+FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY
+WHERE IS_ACTIVE = TRUE
+GROUP BY LOAD_STRATEGY
+ORDER BY LOAD_STRATEGY;
+
+-- Show views per schema
 SELECT 
     SOURCE_SCHEMA,
     COUNT(*) AS VIEW_COUNT

@@ -16,7 +16,7 @@ Deploy a complete temporal data archive solution that preserves your Snowflake A
 5. **Cortex Intelligence Agent** - AI agent for deep account analysis
 6. **Streamlit Dashboard** - Interactive analytics application
 
-## Prerequisites
+## Prerequisites1
 
 Before deploying, ensure you have:
 - ACCOUNTADMIN role access (for initial setup)
