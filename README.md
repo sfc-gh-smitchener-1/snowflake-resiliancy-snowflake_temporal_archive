@@ -7,7 +7,7 @@
 
 | Feature | Description |
 |---------|-------------|
-| **Extended Retention** | Archive 186 ACCOUNT_USAGE views with 7+ year history (vs 1 year native) |
+| **Extended Retention** | Archive 113 ACCOUNT_USAGE views (84 active) with 7+ year history (vs 1 year native) |
 | **SCD Type 2 History** | Track every change with full audit trail and point-in-time queries |
 | **WORM Compliance** | Immutable backups with RETENTION LOCK for SEC 17a-4, HIPAA, FINRA |
 | **AI-Ready Analytics** | 9 semantic views + Cortex Intelligence Agent for natural language queries |
@@ -48,16 +48,22 @@ CALL TEMPORAL_ARCHIVE.ARCHIVE.RUN_SCD_LOAD();
 ## Architecture
 
 ```
-SNOWFLAKE.ACCOUNT_USAGE (186 views, 1-year retention)
+SNOWFLAKE.ACCOUNT_USAGE (113 views registered, 84 active)
          │
-         │ SCD Type 2 Load (6 AM & 6 PM daily)
+         │ 3-Strategy Delta Load (6 AM & 6 PM daily)
+         │  ├── APPEND_ONLY: Watermark-based delta (38 views)
+         │  ├── SOFT_DELETE_MUTABLE: Full SCD2 w/ temp table (33 views)
+         │  └── FULL_COMPARE: Hash comparison fallback (13 views)
          ▼
 ┌─────────────────────────────────────────────────────────┐
 │  TEMPORAL_ARCHIVE Database                              │
 │  ├── ACCOUNT_USAGE Schema (SCD Type 2 archive tables)   │
 │  ├── SEMANTIC Schema (9 semantic views)                 │
 │  ├── AGENTS Schema (SNOWFLAKE_INTELLIGENCE agent)       │
-│  └── ARCHIVE Schema (procedures, tasks, logging)        │
+│  └── ARCHIVE Schema (procedures, tasks, registry, log)  │
+│       ├── VIEW_REGISTRY (113 views, 84 active)          │
+│       ├── WATERMARK_STATE (delta load tracking)         │
+│       └── LOAD_LOG (execution history)                  │
 │                                                         │
 │  + WORM Backup Policy (7-year retention, immutable)     │
 └─────────────────────────────────────────────────────────┘
@@ -67,7 +73,7 @@ SNOWFLAKE.ACCOUNT_USAGE (186 views, 1-year retention)
 
 | Component | Count | Description |
 |-----------|-------|-------------|
-| Archive Tables | 186 | SCD Type 2 tables from ACCOUNT_USAGE + ORGANIZATION_USAGE |
+| Archive Tables | 84 active | SCD Type 2 tables (29 deactivated org/reader/data-sharing views) |
 | Semantic Views | 9 | Cost, security, storage, governance, tasks, BC/DR, query performance analytics |
 | Cortex Agent | 1 | SNOWFLAKE_INTELLIGENCE with 8 tools for natural language queries |
 | Scheduled Tasks | 2 | Morning (6 AM) and evening (6 PM) SCD loads |
@@ -144,9 +150,19 @@ SNOWFLAKE.ACCOUNT_USAGE (186 views, 1-year retention)
 
 1. **Native Execution** - All operations run within Snowflake (Tasks + Backup Policy)
 2. **Immutability First** - WORM backup policy ensures audit compliance
-3. **Hash-Based CDC** - Deterministic change detection via SHA-256
-4. **AI-Ready** - Semantic views optimized for Cortex Analyst
-5. **Self-Service** - Parameterized skill for easy deployment
+3. **3-Strategy Delta Loading** - APPEND_ONLY (watermark), SOFT_DELETE_MUTABLE (temp table SCD2), FULL_COMPARE (hash fallback)
+4. **Hash-Based CDC** - Deterministic change detection via `SHA2(TO_JSON(OBJECT_CONSTRUCT(*)), 256)`
+5. **AI-Ready** - Semantic views optimized for Cortex Analyst
+6. **Self-Service** - Parameterized skill for easy deployment
+
+## Performance
+
+| Metric | Baseline | Optimized | Improvement |
+|--------|----------|-----------|-------------|
+| Runtime | 2302s (38 min) | 801s (13 min) | **65% faster** |
+| Views Processed | 113 (all) | 84 (active) | 29 deactivated |
+| Strategy | Full compare only | 3-strategy delta | Watermark + temp table |
+| Warehouse | LARGE Standard Gen2 | LARGE Standard Gen2 | Auto-suspend 60s |
 
 ## References
 

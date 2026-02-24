@@ -25,7 +25,7 @@ skill/
 ├── templates/                  # Parameterized SQL templates
 │   ├── 01_initial_setup.sql    # Database, warehouse, roles, backup policy
 │   ├── 02_scd_load.sql         # VIEW_REGISTRY, SCD procedures, tasks
-│   ├── 03_semantic_layer.sql   # 8 semantic views
+│   ├── 03_semantic_layer.sql    # 9 semantic views
 │   ├── 04_streamlit_ddl.sql    # Streamlit support objects
 │   └── agent_config.json       # Cortex Agent specification
 └── scripts/
@@ -39,7 +39,7 @@ skill/
 |-----------|---------|-------------|
 | `database_name` | TEMPORAL_ARCHIVE | Target database name |
 | `warehouse_name` | TEMPORAL_ARCHIVE_WH | Compute warehouse |
-| `warehouse_size` | XSMALL | Warehouse size (XSMALL-4XLARGE) |
+| `warehouse_size` | LARGE | Warehouse size (recommended LARGE Gen2 for production) |
 | `admin_role` | DATA_ADMIN | Primary admin role |
 | `backup_retention_days` | 2555 | 7-year WORM retention |
 | `morning_load_hour` | 6 | Morning SCD load (local timezone) |
@@ -134,8 +134,8 @@ SHOW TASKS IN SCHEMA TEMPORAL_ARCHIVE.ARCHIVE;
 
 | Component | Count | Schema |
 |-----------|-------|--------|
-| SCD Archive Tables | 186 | ACCOUNT_USAGE, ORGANIZATION_USAGE |
-| Semantic Views | 8 | SEMANTIC |
+| SCD Archive Tables | 84 active | ACCOUNT_USAGE (29 org/reader/data-sharing deactivated) |
+| Semantic Views | 9 | SEMANTIC |
 | Cortex Agent | 1 | AGENTS |
 | Scheduled Tasks | 2 | ARCHIVE |
 | Procedures | 3 | ARCHIVE |

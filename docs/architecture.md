@@ -9,20 +9,24 @@ Detailed technical architecture of the Snowflake Temporal Archive solution.
 │                              DATA FLOW ARCHITECTURE                             │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
-    SNOWFLAKE.ACCOUNT_USAGE (186 views)
-    SNOWFLAKE.ORGANIZATION_USAGE (21 views)
+    SNOWFLAKE.ACCOUNT_USAGE (84 active views)
+    SNOWFLAKE.ORGANIZATION_USAGE (21 views - deactivated)
+    SNOWFLAKE.DATA_SHARING_USAGE (3 views - deactivated)
+    SNOWFLAKE.READER_ACCOUNT_USAGE (5 views - deactivated)
                     │
                     │ Twice Daily (6 AM & 6 PM)
-                    │ Snowflake Tasks
+                    │ 3-Strategy Delta Load
                     ▼
     ┌───────────────────────────────────────────────────────────────────┐
     │                    TEMPORAL_ARCHIVE Database                      │
     │                                                                   │
     │  ┌────────────────────────────────────────────────────────────┐   │
     │  │ ARCHIVE Schema                                             │   │
-    │  │ • VIEW_REGISTRY (186 source views)                         │   │
+    │  │ • VIEW_REGISTRY (113 views: 84 active, 29 deactivated)    │   │
+    │  │ • WATERMARK_STATE (delta load tracking per view)           │   │
     │  │ • LOAD_LOG (execution history)                             │   │
     │  │ • RUN_SCD_LOAD() procedure                                 │   │
+    │  │ • LOAD_VIEW_ARCHIVE() - 3-strategy SCD loader              │   │
     │  │ • TASK_SCD_LOAD_MORNING (6 AM)                             │   │
     │  │ • TASK_SCD_LOAD_EVENING (6 PM)                             │   │
     │  └────────────────────────────────────────────────────────────┘   │
@@ -34,7 +38,7 @@ Detailed technical architecture of the Snowflake Temporal Archive solution.
     │  │ • USERS_ARCHIVE                                            │   │
     │  │ • LOGIN_HISTORY_ARCHIVE                                    │   │
     │  │ • WAREHOUSE_METERING_HISTORY_ARCHIVE                       │   │
-    │  │ • ... (186 total archive tables)                           │   │
+    │  │ • ... (84 active archive tables)                           │   │
     │  └────────────────────────────────────────────────────────────┘   │
     │                           │                                       │
     │                           ▼                                       │
@@ -106,9 +110,9 @@ DATA_ADMIN (Owner of all objects)
 
 | Procedure | Purpose |
 |-----------|---------|
-| `LOAD_VIEW_ARCHIVE(schema, view)` | Load single view with SCD Type 2 logic |
-| `LOAD_VIEW_ARCHIVE_WITH_RETRY(schema, view, retries, delay)` | Wrapper with retry logic |
-| `RUN_SCD_LOAD()` | Orchestrator - loads all views from VIEW_REGISTRY |
+| `LOAD_VIEW_ARCHIVE(schema, view)` | Load single view with 3-strategy SCD Type 2 logic |
+| `LOAD_VIEW_ARCHIVE_WITH_RETRY(schema, view, retries, delay)` | Wrapper with exponential backoff retry logic |
+| `RUN_SCD_LOAD()` | Orchestrator - loads all active views from VIEW_REGISTRY |
 
 ### Scheduled Tasks
 
@@ -134,16 +138,46 @@ Every archive table includes these SCD columns:
 | `_VALID_FROM` | TIMESTAMP_NTZ | Version start time |
 | `_VALID_TO` | TIMESTAMP_NTZ | Version end time (9999-12-31 if current) |
 
-### Change Detection Flow
+### Change Detection Flow (3-Strategy)
+
+The procedure selects a strategy per view based on VIEW_REGISTRY configuration:
 
 ```
-1. Compute SHA-256 hash of source row
-2. Compare hash with current records in archive
-3. If hash not found in current records:
-   a. Mark existing current record as historical (_IS_CURRENT = FALSE, _VALID_TO = now)
-   b. Insert new record (_IS_CURRENT = TRUE, _VALID_FROM = now)
-4. Log results to LOAD_LOG
+                    ┌──────────────────────┐
+                    │   Source View        │
+                    │ (ACCOUNT_USAGE.X)    │
+                    └──────────┬───────────┘
+                               │
+                    ┌──────────┴───────────┐
+                    │  Check LOAD_STRATEGY │
+                    │  from VIEW_REGISTRY  │
+                    └──────────┬───────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                 │
+              ▼                ▼                 ▼
+   ┌──────────────────┐ ┌────────────────┐ ┌──────────────────┐
+   │  APPEND_ONLY     │ │ SOFT_DELETE    │ │  FULL_COMPARE    │
+   │  (38 views)      │ │ _MUTABLE      │ │  (13 views)      │
+   │                  │ │ (33 views)     │ │                  │
+   │ Watermark-based  │ │ Full SCD2 via  │ │ Hash comparison  │
+   │ delta: only load │ │ temp table:    │ │ fallback: scan   │
+   │ rows after last  │ │ single-scan    │ │ all current rows │
+   │ MAX(watermark)   │ │ UPDATE+INSERT  │ │ + compare hashes │
+   └──────────────────┘ └────────────────┘ └──────────────────┘
 ```
+
+**APPEND_ONLY** (watermark delta): Reads `MAX(watermark_column)` from WATERMARK_STATE,
+queries only new rows from source, inserts directly. Best for time-series views
+(e.g., QUERY_HISTORY, LOGIN_HISTORY, WAREHOUSE_METERING_HISTORY).
+
+**SOFT_DELETE_MUTABLE** (full SCD2 with temp table): Materializes source hashes into
+a temp table, then performs UPDATE (expire changed rows) + INSERT (new versions)
+in a single pass. Best for mutable views (e.g., USERS, ROLES, DATABASES).
+
+**FULL_COMPARE** (hash comparison fallback): Scans all current archive rows and
+compares hashes with source. Used for views without clear keys or watermarks
+(e.g., FUNCTIONS, EXTERNAL_FUNCTIONS).
 
 ### Initial vs Incremental Load
 
@@ -153,9 +187,12 @@ Every archive table includes these SCD columns:
 - Sets _VALID_FROM to load time, _VALID_TO to 9999-12-31
 
 **Incremental Load** (table exists):
-- Computes hash for all source rows
-- Marks changed/deleted records as historical
-- Inserts new/changed records as current
+- Selects strategy from VIEW_REGISTRY (APPEND_ONLY, SOFT_DELETE_MUTABLE, or FULL_COMPARE)
+- APPEND_ONLY: Queries only rows after last watermark, inserts directly
+- SOFT_DELETE_MUTABLE: Temp table hash comparison, UPDATE expired + INSERT new
+- FULL_COMPARE: Full hash comparison fallback
+- Updates WATERMARK_STATE for APPEND_ONLY views
+- Logs results to LOAD_LOG
 
 ## Semantic Layer
 
@@ -230,15 +267,18 @@ ALTER TABLE QUERY_HISTORY_ARCHIVE CLUSTER BY ("_IS_CURRENT", "_VALID_FROM");
 
 | Use Case | Recommended Size |
 |----------|-----------------|
-| Initial load (small account) | X-Small |
-| Initial load (large account) | Medium |
-| Incremental loads | X-Small |
+| Production loads (84 active views) | LARGE Standard Gen2 |
+| Initial load (large account) | LARGE Standard Gen2 |
 | Complex analytical queries | Medium+ |
+
+> **Note**: The production deployment uses `LARGE` / `STANDARD` / Generation 2 (`STANDARD_GEN_2`)
+> with 60-second auto-suspend. Gen2 provides better price-performance for the mixed
+> read/write workload of SCD loads.
 
 ### Storage Estimation
 
 Archive storage grows based on:
-- Number of source views (186 baseline)
+- Number of active source views (84 active baseline)
 - Data change frequency
 - Historical record accumulation
 

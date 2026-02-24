@@ -9,7 +9,7 @@ Deploy a complete temporal data archive solution that preserves your Snowflake A
 
 ## What This Skill Creates
 
-1. **SCD Type 2 Archive Tables** - Preserve every change to 186 ACCOUNT_USAGE views with full audit trail
+1. **SCD Type 2 Archive Tables** - Preserve every change to 113 registered ACCOUNT_USAGE views (84 active) with full audit trail
 2. **WORM Backup Policy** - SEC 17a-4 / HIPAA / FINRA compliant immutable backups (7-year retention)
 3. **Automated Data Loads** - Twice daily scheduled tasks (configurable)
 4. **9 Semantic Views** - Natural language analytics via Cortex Analyst
@@ -43,7 +43,7 @@ Deploy Temporal Archive with database name MY_ARCHIVE and warehouse MY_WH
 |-----------|---------|-------------|
 | `database_name` | TEMPORAL_ARCHIVE | Target database name |
 | `warehouse_name` | TEMPORAL_ARCHIVE_WH | Warehouse name |
-| `warehouse_size` | XSMALL | Warehouse size (XSMALL-4XLARGE) |
+| `warehouse_size` | XSMALL | Warehouse size (LARGE Gen2 recommended for production) |
 | `admin_role` | DATA_ADMIN | Primary admin role |
 | `backup_retention_days` | 2555 | Backup retention (7 years default) |
 | `morning_load_hour` | 6 | Morning SCD load hour (local timezone) |
@@ -93,8 +93,9 @@ Run the SQL scripts in order, substituting parameters:
 - Creates schemas (ARCHIVE, ACCOUNT_USAGE, ORGANIZATION_USAGE, SEMANTIC, AGENTS, STREAMLIT)
 
 **3.2 SCD Load Infrastructure (02_scd_load.sql)**
-- Creates VIEW_REGISTRY with 186 source views
-- Creates LOAD_VIEW_ARCHIVE procedure (SCD Type 2 logic)
+- Creates VIEW_REGISTRY with 113 source views (84 active, 29 deactivated)
+- Creates WATERMARK_STATE for delta load tracking
+- Creates LOAD_VIEW_ARCHIVE procedure (3-strategy SCD Type 2 logic)
 - Creates scheduled tasks for automated loads
 
 **3.3 Semantic Layer (03_semantic_layer.sql)**
@@ -239,9 +240,9 @@ GRANT USAGE ON AGENT {{DATABASE_NAME}}.AGENTS.SNOWFLAKE_INTELLIGENCE TO ROLE <YO
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                     SNOWFLAKE.ACCOUNT_USAGE                         │
-│  (186 views with 1-year retention)                                  │
+│  (113 views registered, 84 active)                                  │
 └─────────────────────┬───────────────────────────────────────────────┘
-                      │ Twice Daily SCD Load
+                      │ Twice Daily 3-Strategy Delta Load
                       ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                    {{DATABASE_NAME}}                                │

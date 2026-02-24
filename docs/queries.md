@@ -690,3 +690,490 @@ WHERE "_VALID_FROM" >= DATEADD('day', -7, CURRENT_TIMESTAMP())
 GROUP BY "_SOURCE_TABLE"
 ORDER BY changes DESC;
 ```
+
+---
+
+## Semantic View Queries
+
+These queries leverage the 9 semantic views deployed in the `TEMPORAL_ARCHIVE.SEMANTIC` schema. Use them with Cortex Analyst for natural language analytics, or run them directly.
+
+### WAREHOUSE_COST_ANALYTICS
+
+#### Top Warehouses by Credit Consumption
+
+```sql
+-- Which warehouses consumed the most credits last month?
+
+SELECT 
+    WAREHOUSE_NAME,
+    ROUND(SUM(CREDITS_USED), 2) AS total_credits,
+    ROUND(SUM(CREDITS_USED_COMPUTE), 2) AS compute_credits,
+    ROUND(SUM(CREDITS_USED_CLOUD_SERVICES), 2) AS cloud_credits,
+    COUNT(*) AS metering_periods
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND START_TIME >= DATE_TRUNC('month', DATEADD('month', -1, CURRENT_DATE()))
+  AND START_TIME < DATE_TRUNC('month', CURRENT_DATE())
+GROUP BY WAREHOUSE_NAME
+ORDER BY total_credits DESC;
+```
+
+#### Top Credit Consumers by User and Role
+
+```sql
+-- Who are the top credit consumers by user and role?
+
+SELECT 
+    USER_NAME,
+    ROLE_NAME,
+    WAREHOUSE_NAME,
+    COUNT(*) AS query_count,
+    ROUND(SUM(TOTAL_ELAPSED_TIME) / 1000 / 60, 2) AS total_minutes,
+    ROUND(SUM(CREDITS_USED_CLOUD_SERVICES), 4) AS cloud_credits
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND START_TIME >= DATEADD('day', -30, CURRENT_DATE())
+GROUP BY USER_NAME, ROLE_NAME, WAREHOUSE_NAME
+ORDER BY cloud_credits DESC
+LIMIT 25;
+```
+
+### SERVERLESS_COST_ANALYTICS
+
+#### Dynamic Table Refresh Costs
+
+```sql
+-- What are my dynamic table costs and refresh patterns?
+
+SELECT 
+    NAME AS dt_name,
+    DATABASE_NAME,
+    SCHEMA_NAME,
+    STATE,
+    COUNT(*) AS refresh_count,
+    SUM(CASE WHEN STATE = 'SUCCEEDED' THEN 1 ELSE 0 END) AS successes,
+    SUM(CASE WHEN STATE IN ('FAILED', 'UPSTREAM_FAILED') THEN 1 ELSE 0 END) AS failures,
+    AVG(TARGET_LAG_SEC) AS avg_target_lag_sec
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.DYNAMIC_TABLE_REFRESH_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND REFRESH_START_TIME >= DATEADD('day', -7, CURRENT_DATE())
+GROUP BY NAME, DATABASE_NAME, SCHEMA_NAME, STATE
+ORDER BY refresh_count DESC;
+```
+
+#### Serverless Task Credit Consumption
+
+```sql
+-- Which serverless tasks are consuming the most credits?
+
+SELECT 
+    TASK_NAME,
+    DATABASE_NAME,
+    SCHEMA_NAME,
+    ROUND(SUM(CREDITS_USED), 4) AS total_credits,
+    COUNT(*) AS execution_count,
+    ROUND(AVG(CREDITS_USED), 6) AS avg_credits_per_run
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.SERVERLESS_TASK_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND START_TIME >= DATEADD('day', -30, CURRENT_DATE())
+GROUP BY TASK_NAME, DATABASE_NAME, SCHEMA_NAME
+ORDER BY total_credits DESC
+LIMIT 20;
+```
+
+### COST_ANALYTICS
+
+#### Daily Cost Breakdown by Service Type
+
+```sql
+-- What's my daily cost breakdown by service type?
+
+SELECT 
+    USAGE_DATE,
+    SERVICE_TYPE,
+    ROUND(SUM(CREDITS_USED), 2) AS total_credits,
+    ROUND(SUM(CREDITS_USED_COMPUTE), 2) AS compute_credits,
+    ROUND(SUM(CREDITS_USED_CLOUD_SERVICES), 2) AS cloud_credits,
+    ROUND(SUM(CREDITS_BILLED), 2) AS billed_credits
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.METERING_DAILY_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND USAGE_DATE >= DATEADD('day', -30, CURRENT_DATE())
+GROUP BY USAGE_DATE, SERVICE_TYPE
+ORDER BY USAGE_DATE DESC, total_credits DESC;
+```
+
+### SECURITY_ANALYTICS
+
+#### Failed Login Patterns (Brute Force Detection)
+
+```sql
+-- Detect potential brute force attacks: multiple failed logins from same IP
+
+SELECT 
+    CLIENT_IP,
+    USER_NAME,
+    REPORTED_CLIENT_TYPE,
+    COUNT(*) AS failed_attempts,
+    MIN(EVENT_TIMESTAMP) AS first_attempt,
+    MAX(EVENT_TIMESTAMP) AS last_attempt,
+    DATEDIFF('minute', MIN(EVENT_TIMESTAMP), MAX(EVENT_TIMESTAMP)) AS window_minutes
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.LOGIN_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND IS_SUCCESS = 'NO'
+  AND EVENT_TIMESTAMP >= DATEADD('day', -7, CURRENT_DATE())
+GROUP BY CLIENT_IP, USER_NAME, REPORTED_CLIENT_TYPE
+HAVING COUNT(*) >= 5
+ORDER BY failed_attempts DESC;
+```
+
+#### MFA Adoption Report
+
+```sql
+-- Which users don't have MFA enabled?
+
+SELECT 
+    NAME AS user_name,
+    EMAIL,
+    DEFAULT_ROLE,
+    HAS_MFA,
+    LAST_SUCCESS_LOGIN,
+    DISABLED,
+    DATEDIFF('day', LAST_SUCCESS_LOGIN, CURRENT_TIMESTAMP()) AS days_since_login
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.USERS_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND (HAS_MFA = FALSE OR HAS_MFA IS NULL)
+  AND DISABLED = 'false'
+ORDER BY LAST_SUCCESS_LOGIN DESC;
+```
+
+### STORAGE_ANALYTICS
+
+#### Largest Tables by Storage
+
+```sql
+-- What are my largest tables by storage?
+
+SELECT 
+    TABLE_CATALOG AS database_name,
+    TABLE_SCHEMA AS schema_name,
+    TABLE_NAME,
+    ROUND(ACTIVE_BYTES / POWER(1024, 3), 2) AS active_gb,
+    ROUND(TIME_TRAVEL_BYTES / POWER(1024, 3), 2) AS time_travel_gb,
+    ROUND(FAILSAFE_BYTES / POWER(1024, 3), 2) AS failsafe_gb,
+    ROUND((ACTIVE_BYTES + TIME_TRAVEL_BYTES + FAILSAFE_BYTES) / POWER(1024, 3), 2) AS total_gb
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.TABLE_STORAGE_METRICS_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND ACTIVE_BYTES > 0
+ORDER BY ACTIVE_BYTES DESC
+LIMIT 25;
+```
+
+#### Storage Growth Trend by Database
+
+```sql
+-- Show me storage growth trend by database for the last 90 days
+
+SELECT 
+    DATABASE_NAME,
+    USAGE_DATE,
+    ROUND(AVERAGE_DATABASE_BYTES / POWER(1024, 3), 2) AS database_gb,
+    ROUND(AVERAGE_FAILSAFE_BYTES / POWER(1024, 3), 2) AS failsafe_gb
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.DATABASE_STORAGE_USAGE_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND USAGE_DATE >= DATEADD('day', -90, CURRENT_DATE())
+ORDER BY DATABASE_NAME, USAGE_DATE DESC;
+```
+
+### GOVERNANCE_ANALYTICS
+
+#### Users with ACCOUNTADMIN Role
+
+```sql
+-- List all users with ACCOUNTADMIN role
+
+SELECT 
+    g.GRANTEE_NAME AS user_name,
+    g.ROLE AS granted_role,
+    g.GRANTED_BY,
+    g.CREATED_ON AS grant_date,
+    u.EMAIL,
+    u.HAS_MFA,
+    u.LAST_SUCCESS_LOGIN,
+    u.DISABLED
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.GRANTS_TO_USERS_ARCHIVE g
+LEFT JOIN TEMPORAL_ARCHIVE.ACCOUNT_USAGE.USERS_ARCHIVE u
+    ON g.GRANTEE_NAME = u.NAME AND u."_IS_CURRENT" = TRUE
+WHERE g."_IS_CURRENT" = TRUE
+  AND g.ROLE = 'ACCOUNTADMIN'
+ORDER BY g.CREATED_ON;
+```
+
+#### Dormant User Identification
+
+```sql
+-- Find dormant users (no login in 90+ days) for deactivation review
+
+SELECT 
+    NAME AS user_name,
+    EMAIL,
+    DEFAULT_ROLE,
+    LAST_SUCCESS_LOGIN,
+    DATEDIFF('day', LAST_SUCCESS_LOGIN, CURRENT_TIMESTAMP()) AS days_inactive,
+    DISABLED,
+    HAS_MFA
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.USERS_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND DISABLED = 'false'
+  AND LAST_SUCCESS_LOGIN < DATEADD('day', -90, CURRENT_TIMESTAMP())
+ORDER BY days_inactive DESC;
+```
+
+### TASK_ANALYTICS
+
+#### Task Failure Analysis
+
+```sql
+-- Which tasks are failing most frequently?
+
+SELECT 
+    NAME AS task_name,
+    DATABASE_NAME,
+    SCHEMA_NAME,
+    STATE,
+    COUNT(*) AS run_count,
+    SUM(CASE WHEN STATE = 'FAILED' THEN 1 ELSE 0 END) AS failure_count,
+    ROUND(SUM(CASE WHEN STATE = 'FAILED' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS failure_pct,
+    MAX(ERROR_MESSAGE) AS latest_error
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.TASK_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND SCHEDULED_TIME >= DATEADD('day', -7, CURRENT_DATE())
+GROUP BY NAME, DATABASE_NAME, SCHEMA_NAME, STATE
+HAVING SUM(CASE WHEN STATE = 'FAILED' THEN 1 ELSE 0 END) > 0
+ORDER BY failure_count DESC;
+```
+
+#### Task Execution Timeline
+
+```sql
+-- Show task execution patterns for the last 24 hours
+
+SELECT 
+    NAME AS task_name,
+    STATE,
+    SCHEDULED_TIME,
+    QUERY_START_TIME,
+    COMPLETED_TIME,
+    DATEDIFF('second', QUERY_START_TIME, COMPLETED_TIME) AS duration_seconds,
+    ATTEMPT_NUMBER,
+    ERROR_MESSAGE
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.TASK_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND SCHEDULED_TIME >= DATEADD('hour', -24, CURRENT_TIMESTAMP())
+ORDER BY SCHEDULED_TIME DESC;
+```
+
+### BCDR_ANALYTICS
+
+#### Hot Tables (High Data Churn for DR Prioritization)
+
+```sql
+-- What are my hot tables with highest data churn?
+
+SELECT 
+    TABLE_CATALOG AS database_name,
+    TABLE_SCHEMA AS schema_name,
+    TABLE_NAME,
+    ROUND(ACTIVE_BYTES / POWER(1024, 3), 2) AS active_gb,
+    ROUND(FAILSAFE_BYTES / POWER(1024, 3), 2) AS failsafe_gb,
+    ROUND(FAILSAFE_BYTES * 100.0 / NULLIF(ACTIVE_BYTES, 0), 2) AS churn_pct,
+    CASE 
+        WHEN FAILSAFE_BYTES > ACTIVE_BYTES * 0.5 THEN 'HIGH CHURN - Priority DR'
+        WHEN FAILSAFE_BYTES > ACTIVE_BYTES * 0.1 THEN 'MEDIUM CHURN'
+        ELSE 'LOW CHURN'
+    END AS dr_priority
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.TABLE_STORAGE_METRICS_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND ACTIVE_BYTES > 0
+ORDER BY FAILSAFE_BYTES DESC
+LIMIT 30;
+```
+
+#### Replication RPO Monitoring
+
+```sql
+-- What's my RPO based on replication schedules?
+
+SELECT 
+    DATABASE_NAME,
+    START_TIME,
+    END_TIME,
+    DATEDIFF('minute', START_TIME, END_TIME) AS replication_minutes,
+    ROUND(CREDITS_USED, 4) AS credits,
+    ROUND(BYTES_TRANSFERRED / POWER(1024, 3), 2) AS gb_transferred
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.DATABASE_REPLICATION_USAGE_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND START_TIME >= DATEADD('day', -7, CURRENT_DATE())
+ORDER BY START_TIME DESC;
+```
+
+### QUERY_PERFORMANCE_ANALYTICS
+
+#### Long-Running Queries with Table Access
+
+```sql
+-- Show me long-running queries over 5 minutes with what they accessed
+
+SELECT 
+    qh.QUERY_ID,
+    qh.USER_NAME,
+    qh.WAREHOUSE_NAME,
+    qh.WAREHOUSE_SIZE,
+    ROUND(qh.TOTAL_ELAPSED_TIME / 1000 / 60, 2) AS duration_minutes,
+    ROUND(qh.BYTES_SCANNED / POWER(1024, 3), 2) AS gb_scanned,
+    qh.EXECUTION_STATUS,
+    qh.START_TIME
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE qh
+WHERE qh."_IS_CURRENT" = TRUE
+  AND qh.TOTAL_ELAPSED_TIME > 300000
+  AND qh.START_TIME >= DATEADD('day', -7, CURRENT_DATE())
+ORDER BY qh.TOTAL_ELAPSED_TIME DESC
+LIMIT 20;
+```
+
+#### Queries with Remote Spillage (Memory Pressure)
+
+```sql
+-- Find queries with remote spillage indicating memory pressure
+
+SELECT 
+    USER_NAME,
+    WAREHOUSE_NAME,
+    WAREHOUSE_SIZE,
+    QUERY_ID,
+    ROUND(TOTAL_ELAPSED_TIME / 1000, 2) AS duration_sec,
+    ROUND(BYTES_SPILLED_TO_REMOTE_STORAGE / POWER(1024, 3), 2) AS remote_spill_gb,
+    ROUND(BYTES_SPILLED_TO_LOCAL_STORAGE / POWER(1024, 3), 2) AS local_spill_gb,
+    START_TIME
+FROM TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND BYTES_SPILLED_TO_REMOTE_STORAGE > 0
+  AND START_TIME >= DATEADD('day', -7, CURRENT_DATE())
+ORDER BY BYTES_SPILLED_TO_REMOTE_STORAGE DESC
+LIMIT 20;
+```
+
+---
+
+## Pipeline Monitoring
+
+Queries for monitoring the Temporal Archive pipeline itself — load status, watermark tracking, and registry health.
+
+### Load Log Analysis
+
+```sql
+-- Recent load history with status breakdown
+
+SELECT 
+    SOURCE_SCHEMA,
+    SOURCE_VIEW,
+    STATUS,
+    ROWS_INSERTED,
+    ROWS_UPDATED,
+    DURATION_SECONDS,
+    LOAD_TIMESTAMP
+FROM TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG
+ORDER BY LOAD_TIMESTAMP DESC
+LIMIT 50;
+```
+
+### Load Summary by Run
+
+```sql
+-- Aggregate load metrics per run (grouped by approximate load time)
+
+SELECT 
+    DATE_TRUNC('hour', LOAD_TIMESTAMP) AS run_hour,
+    COUNT(*) AS views_processed,
+    SUM(CASE WHEN STATUS = 'SUCCESS' THEN 1 ELSE 0 END) AS successes,
+    SUM(CASE WHEN STATUS != 'SUCCESS' THEN 1 ELSE 0 END) AS failures,
+    SUM(ROWS_INSERTED) AS total_inserted,
+    SUM(ROWS_UPDATED) AS total_updated,
+    ROUND(SUM(DURATION_SECONDS), 0) AS total_duration_sec,
+    ROUND(AVG(DURATION_SECONDS), 2) AS avg_duration_sec
+FROM TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG
+GROUP BY DATE_TRUNC('hour', LOAD_TIMESTAMP)
+ORDER BY run_hour DESC
+LIMIT 20;
+```
+
+### Watermark State Status
+
+```sql
+-- Current watermark positions for APPEND_ONLY views
+
+SELECT 
+    ws.SOURCE_SCHEMA,
+    ws.SOURCE_VIEW,
+    ws.LAST_WATERMARK,
+    ws.UPDATED_AT,
+    vr.LOAD_STRATEGY,
+    vr.WATERMARK_COLUMN,
+    vr.IS_ACTIVE
+FROM TEMPORAL_ARCHIVE.ARCHIVE.WATERMARK_STATE ws
+JOIN TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY vr
+    ON ws.SOURCE_SCHEMA = vr.SOURCE_SCHEMA 
+    AND ws.SOURCE_VIEW = vr.SOURCE_VIEW
+ORDER BY ws.UPDATED_AT DESC;
+```
+
+### View Registry Health
+
+```sql
+-- View registry summary by strategy and status
+
+SELECT 
+    LOAD_STRATEGY,
+    IS_ACTIVE,
+    COUNT(*) AS view_count,
+    LISTAGG(SOURCE_SCHEMA || '.' || SOURCE_VIEW, ', ') 
+        WITHIN GROUP (ORDER BY SOURCE_SCHEMA, SOURCE_VIEW) AS views
+FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY
+GROUP BY LOAD_STRATEGY, IS_ACTIVE
+ORDER BY IS_ACTIVE DESC, LOAD_STRATEGY;
+```
+
+### Failed Loads Investigation
+
+```sql
+-- Investigate recent load failures with error details
+
+SELECT 
+    SOURCE_SCHEMA,
+    SOURCE_VIEW,
+    STATUS,
+    ERROR_MESSAGE,
+    LOAD_TIMESTAMP,
+    DURATION_SECONDS
+FROM TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG
+WHERE STATUS != 'SUCCESS'
+  AND LOAD_TIMESTAMP >= DATEADD('day', -7, CURRENT_TIMESTAMP())
+ORDER BY LOAD_TIMESTAMP DESC;
+```
+
+### Deactivated Views Summary
+
+```sql
+-- List all deactivated views and the reason
+
+SELECT 
+    SOURCE_SCHEMA,
+    SOURCE_VIEW,
+    LOAD_STRATEGY,
+    WATERMARK_COLUMN,
+    IS_ACTIVE
+FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY
+WHERE IS_ACTIVE = FALSE
+ORDER BY SOURCE_SCHEMA, SOURCE_VIEW;
+-- 29 views: ORGANIZATION_USAGE (21), DATA_SHARING_USAGE (3), READER_ACCOUNT_USAGE (5)
+-- Deactivated because they return 0 rows but take 3-8 min each to query
+```

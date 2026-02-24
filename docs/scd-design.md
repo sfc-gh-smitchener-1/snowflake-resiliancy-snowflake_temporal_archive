@@ -64,11 +64,13 @@ This approach:
 - Is deterministic and reproducible
 - Handles NULL values correctly
 
-### Load Process
+### Load Process (3-Strategy)
+
+The load procedure selects a strategy per view from VIEW_REGISTRY:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                            SCD LOAD ALGORITHM                                   │
+│                        3-STRATEGY SCD LOAD ALGORITHM                            │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
                     ┌──────────────────────┐
@@ -76,28 +78,25 @@ This approach:
                     │ (ACCOUNT_USAGE.X)    │
                     └──────────┬───────────┘
                                │
-                               ▼
-                    ┌──────────────────────┐
-                    │  Compute SHA-256     │
-                    │  hash for each row   │
+                    ┌──────────┴───────────┐
+                    │  Lookup LOAD_STRATEGY│
+                    │  in VIEW_REGISTRY    │
                     └──────────┬───────────┘
                                │
-              ┌────────────────┴────────────────┐
-              │                                 │
-              ▼                                 ▼
-    ┌──────────────────┐            ┌──────────────────┐
-    │  Compare hashes  │            │  Find hashes in  │
-    │  NOT in source   │            │  source NOT in   │
-    │  (deleted/changed)│           │  target (new)    │
-    └────────┬─────────┘            └────────┬─────────┘
-             │                               │
-             ▼                               ▼
-    ┌──────────────────┐            ┌──────────────────┐
-    │  UPDATE:         │            │  INSERT:         │
-    │  _IS_CURRENT=F   │            │  _IS_CURRENT=T   │
-    │  _VALID_TO=now   │            │  _VALID_FROM=now │
-    └──────────────────┘            │  _VALID_TO=9999  │
-                                    └──────────────────┘
+         ┌─────────────────────┼─────────────────────┐
+         │                     │                      │
+         ▼                     ▼                      ▼
+┌──────────────────┐ ┌──────────────────┐  ┌──────────────────┐
+│  APPEND_ONLY     │ │ SOFT_DELETE      │  │  FULL_COMPARE    │
+│  (38 views)      │ │ _MUTABLE         │  │  (13 views)      │
+│                  │ │ (33 views)       │  │                  │
+│ 1. Read watermark│ │ 1. Create temp   │  │ 1. Compute hash  │
+│    from state    │ │    table with    │  │    for all source │
+│ 2. Query rows    │ │    source hashes │  │ 2. Compare with  │
+│    after mark    │ │ 2. UPDATE expired│  │    archive hashes│
+│ 3. INSERT only   │ │ 3. INSERT new    │  │ 3. UPDATE expired│
+│ 4. Update mark   │ │ 4. Drop temp     │  │ 4. INSERT new    │
+└──────────────────┘ └──────────────────┘  └──────────────────┘
 ```
 
 ## Querying SCD Data
@@ -216,14 +215,15 @@ Returns summary:
 ```json
 {
   "start_time": "2025-01-15 06:00:00",
-  "end_time": "2025-01-15 06:15:00",
-  "duration_seconds": 900,
-  "views_in_registry": 186,
-  "views_processed": 186,
-  "success_count": 180,
-  "error_count": 6,
-  "total_updated": 1500,
-  "total_inserted": 45000,
+  "end_time": "2025-01-15 06:13:00",
+  "duration_seconds": 801,
+  "views_in_registry": 113,
+  "active_views": 84,
+  "views_processed": 84,
+  "success_count": 84,
+  "error_count": 0,
+  "total_updated": 536,
+  "total_inserted": 9034,
   "table_results": [...]
 }
 ```
@@ -236,12 +236,20 @@ The registry controls which views are archived:
 SELECT * FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY;
 ```
 
-| SOURCE_SCHEMA | SOURCE_VIEW | IS_ACTIVE |
-|--------------|-------------|-----------|
-| ACCOUNT_USAGE | QUERY_HISTORY | TRUE |
-| ACCOUNT_USAGE | USERS | TRUE |
-| ACCOUNT_USAGE | LOGIN_HISTORY | TRUE |
-| ... | ... | ... |
+| SOURCE_SCHEMA | SOURCE_VIEW | IS_ACTIVE | LOAD_STRATEGY | WATERMARK_COLUMN | UNIQUE_KEY_COLUMN |
+|--------------|-------------|-----------|---------------|------------------|-------------------|
+| ACCOUNT_USAGE | QUERY_HISTORY | TRUE | APPEND_ONLY | START_TIME | NULL |
+| ACCOUNT_USAGE | USERS | TRUE | SOFT_DELETE_MUTABLE | NULL | NAME |
+| ACCOUNT_USAGE | LOGIN_HISTORY | TRUE | APPEND_ONLY | EVENT_TIMESTAMP | NULL |
+| ACCOUNT_USAGE | FUNCTIONS | TRUE | FULL_COMPARE | NULL | NULL |
+| ORGANIZATION_USAGE | WAREHOUSE_METERING_HISTORY | FALSE | APPEND_ONLY | START_TIME | NULL |
+| ... | ... | ... | ... | ... | ... |
+
+**View Counts**: 113 total (84 active, 29 deactivated)
+- **38 APPEND_ONLY**: Time-series views with watermark-based delta loading
+- **33 SOFT_DELETE_MUTABLE**: Mutable views with full SCD2 via temp table
+- **13 FULL_COMPARE**: Fallback hash comparison for views without clear keys
+- **29 deactivated**: ORGANIZATION_USAGE (21), DATA_SHARING_USAGE (3), READER_ACCOUNT_USAGE (5) - return 0 rows but take 3-8 min each
 
 To disable a view:
 
@@ -250,6 +258,35 @@ UPDATE TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY
 SET IS_ACTIVE = FALSE 
 WHERE SOURCE_VIEW = 'LARGE_VIEW_TO_SKIP';
 ```
+
+To re-activate deactivated org views (when org-level data exists):
+
+```sql
+UPDATE TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY
+SET IS_ACTIVE = TRUE
+WHERE SOURCE_SCHEMA = 'ORGANIZATION_USAGE';
+```
+
+## WATERMARK_STATE
+
+Tracks the last-loaded watermark for APPEND_ONLY views, enabling delta loading:
+
+```sql
+SELECT * FROM TEMPORAL_ARCHIVE.ARCHIVE.WATERMARK_STATE;
+```
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `SOURCE_SCHEMA` | VARCHAR | Source schema name |
+| `SOURCE_VIEW` | VARCHAR | Source view name |
+| `LAST_WATERMARK` | TIMESTAMP_NTZ | Last MAX(watermark_column) loaded |
+| `UPDATED_AT` | TIMESTAMP_NTZ | When watermark was last updated |
+
+On each APPEND_ONLY load, the procedure:
+1. Reads `LAST_WATERMARK` for the view
+2. Queries only source rows where `watermark_column > LAST_WATERMARK`
+3. Inserts new rows into the archive
+4. Updates `LAST_WATERMARK` with the new MAX value
 
 ## Performance Optimization
 
