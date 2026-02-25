@@ -245,19 +245,22 @@ BEGIN
         -- Create schema if needed
         EXECUTE IMMEDIATE 'CREATE SCHEMA IF NOT EXISTS {{DATABASE_NAME}}.' || v_target_schema;
         
-        -- Create table with surrogate key and SCD columns
+        -- Create table with surrogate key and SCD columns FIRST, then source columns
         v_create_sql := 'CREATE TABLE ' || v_target_fqn || ' AS 
+            WITH src_with_hash AS (
+                SELECT *, OBJECT_CONSTRUCT(*) AS _obj FROM ' || v_source_fqn || '
+            )
             SELECT 
                 ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS "_ARCHIVE_ID",
-                src.*,
-                SHA2(TO_JSON(OBJECT_CONSTRUCT(*)), 256) AS "_ROW_HASH",
+                SHA2(TO_JSON(_obj), 256) AS "_ROW_HASH",
                 CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_LOADED_AT",
                 ''SNOWFLAKE_' || v_schema || ''' AS "_SOURCE_SYSTEM",
                 ''' || v_view || ''' AS "_SOURCE_TABLE",
                 TRUE AS "_IS_CURRENT",
                 CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_VALID_FROM",
-                ''9999-12-31 23:59:59''::TIMESTAMP_NTZ AS "_VALID_TO"
-            FROM ' || v_source_fqn || ' src';
+                ''9999-12-31 23:59:59''::TIMESTAMP_NTZ AS "_VALID_TO",
+                * EXCLUDE _obj
+            FROM src_with_hash';
         
         EXECUTE IMMEDIATE v_create_sql;
         
@@ -290,22 +293,25 @@ BEGIN
     EXECUTE IMMEDIATE v_update_sql;
     v_rows_updated := SQLROWCOUNT;
     
-    -- Step 2: Insert new/changed records
+    -- Step 2: Insert new/changed records (SCD columns first, then source columns)
     v_insert_sql := '
         INSERT INTO ' || v_target_fqn || '
+        WITH src_with_hash AS (
+            SELECT *, OBJECT_CONSTRUCT(*) AS _obj FROM ' || v_source_fqn || '
+        )
         SELECT 
             (SELECT COALESCE(MAX("_ARCHIVE_ID"), 0) FROM ' || v_target_fqn || ') + 
                 ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS "_ARCHIVE_ID",
-            src.*,
-            SHA2(TO_JSON(OBJECT_CONSTRUCT(*)), 256) AS "_ROW_HASH",
+            SHA2(TO_JSON(_obj), 256) AS "_ROW_HASH",
             CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_LOADED_AT",
             ''SNOWFLAKE_' || v_schema || ''' AS "_SOURCE_SYSTEM",
             ''' || v_view || ''' AS "_SOURCE_TABLE",
             TRUE AS "_IS_CURRENT",
             CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_VALID_FROM",
-            ''9999-12-31 23:59:59''::TIMESTAMP_NTZ AS "_VALID_TO"
-        FROM ' || v_source_fqn || ' src
-        WHERE SHA2(TO_JSON(OBJECT_CONSTRUCT(*)), 256) NOT IN (
+            ''9999-12-31 23:59:59''::TIMESTAMP_NTZ AS "_VALID_TO",
+            * EXCLUDE _obj
+        FROM src_with_hash
+        WHERE SHA2(TO_JSON(_obj), 256) NOT IN (
             SELECT "_ROW_HASH" FROM ' || v_target_fqn || ' WHERE "_IS_CURRENT" = TRUE
         )';
     

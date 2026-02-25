@@ -25,7 +25,7 @@ skill/
 ├── templates/                  # Parameterized SQL templates
 │   ├── 01_initial_setup.sql    # Database, warehouse, roles, backup policy
 │   ├── 02_scd_load.sql         # VIEW_REGISTRY, SCD procedures, tasks
-│   ├── 03_semantic_layer.sql    # 9 semantic views
+│   ├── 03_semantic_layer.sql    # 10 semantic views
 │   ├── 04_streamlit_ddl.sql    # Streamlit support objects
 │   └── agent_config.json       # Cortex Agent specification
 └── scripts/
@@ -62,6 +62,8 @@ The SQL templates use `{{VARIABLE}}` syntax for parameterization:
 | `{{MORNING_LOAD_HOUR}}` | 6 |
 | `{{EVENING_LOAD_HOUR}}` | 18 |
 | `{{TIMEZONE}}` | America/New_York |
+
+| `{{ORG_SCHEMA}}` | ORGANIZATION_USAGE |
 
 ## Manual Deployment (Without Cortex Code)
 
@@ -124,7 +126,7 @@ AND TABLE_SCHEMA IN ('ACCOUNT_USAGE', 'ORGANIZATION_USAGE');
 SHOW SEMANTIC VIEWS IN SCHEMA TEMPORAL_ARCHIVE.SEMANTIC;
 
 -- Check agent
-SHOW AGENTS IN SCHEMA TEMPORAL_ARCHIVE.AGENTS;
+SHOW AGENTS IN SCHEMA TEMPORAL_ARCHIVE.SEMANTIC;
 
 -- Check scheduled tasks
 SHOW TASKS IN SCHEMA TEMPORAL_ARCHIVE.ARCHIVE;
@@ -134,9 +136,9 @@ SHOW TASKS IN SCHEMA TEMPORAL_ARCHIVE.ARCHIVE;
 
 | Component | Count | Schema |
 |-----------|-------|--------|
-| SCD Archive Tables | 84 active | ACCOUNT_USAGE (29 org/reader/data-sharing deactivated) |
-| Semantic Views | 9 | SEMANTIC |
-| Cortex Agent | 1 | AGENTS |
+| SCD Archive Tables | 107 active | ACCOUNT_USAGE + ORGANIZATION_USAGE (26 reader/data-sharing/non-existent/secure deactivated) |
+| Semantic Views | 10 | SEMANTIC |
+| Cortex Agent | 1 | SEMANTIC |
 | Scheduled Tasks | 2 | ARCHIVE |
 | Procedures | 3 | ARCHIVE |
 | Backup Policy | 1 | ARCHIVE |
@@ -204,7 +206,7 @@ GRANT SELECT ON ALL SEMANTIC VIEWS IN SCHEMA TEMPORAL_ARCHIVE.SEMANTIC TO ROLE S
 Grant agent usage:
 
 ```sql
-GRANT USAGE ON AGENT TEMPORAL_ARCHIVE.AGENTS.SNOWFLAKE_INTELLIGENCE TO ROLE <YOUR_ROLE>;
+GRANT USAGE ON AGENT TEMPORAL_ARCHIVE.SEMANTIC.SNOWFLAKEACCOUNTARCHIVE TO ROLE <YOUR_ROLE>;
 ```
 
 ### Tasks Not Running

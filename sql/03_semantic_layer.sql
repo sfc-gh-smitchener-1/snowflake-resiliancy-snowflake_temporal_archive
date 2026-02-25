@@ -1433,6 +1433,241 @@ QUERY_TYPE values: SELECT, INSERT, UPDATE, DELETE, CREATE_TABLE, etc.'
 
 
 -- =============================================================================
+-- SEMANTIC VIEW: ORGANIZATION_ANALYTICS
+-- Cross-account organization-level cost, contract, balance, and storage analytics
+-- Requires ORGADMIN role for source data population
+-- =============================================================================
+
+CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.ORGANIZATION_ANALYTICS
+    
+    TABLES (
+        USAGE_CURRENCY AS TEMPORAL_ARCHIVE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY_ARCHIVE
+            PRIMARY KEY (ACCOUNT_NAME, USAGE_DATE, SERVICE_LEVEL, USAGE_TYPE)
+            WITH SYNONYMS ('org costs', 'currency costs', 'dollar costs', 'org spend', 'account costs'),
+            
+        REMAINING_BALANCE AS TEMPORAL_ARCHIVE.ORGANIZATION_USAGE.REMAINING_BALANCE_DAILY_ARCHIVE
+            PRIMARY KEY (CONTRACT_NUMBER, DATE)
+            WITH SYNONYMS ('balance', 'remaining credits', 'contract balance', 'capacity remaining'),
+            
+        METERING_DAILY AS TEMPORAL_ARCHIVE.ORGANIZATION_USAGE.METERING_DAILY_HISTORY_ARCHIVE
+            PRIMARY KEY (ACCOUNT_NAME, SERVICE_TYPE, USAGE_DATE)
+            WITH SYNONYMS ('org metering', 'org credits', 'account credits', 'cross-account credits'),
+            
+        WAREHOUSE_METERING AS TEMPORAL_ARCHIVE.ORGANIZATION_USAGE.WAREHOUSE_METERING_HISTORY_ARCHIVE
+            PRIMARY KEY (ACCOUNT_NAME, WAREHOUSE_ID, START_TIME)
+            WITH SYNONYMS ('org warehouse costs', 'account warehouse usage', 'cross-account warehouses'),
+            
+        ACCOUNTS AS TEMPORAL_ARCHIVE.ORGANIZATION_USAGE.ACCOUNTS_ARCHIVE
+            PRIMARY KEY (ACCOUNT_NAME)
+            WITH SYNONYMS ('org accounts', 'account list', 'account inventory', 'snowflake accounts')
+    )
+    
+    RELATIONSHIPS (
+        USAGE_CURRENCY (ACCOUNT_NAME) REFERENCES ACCOUNTS (ACCOUNT_NAME),
+        METERING_DAILY (ACCOUNT_NAME) REFERENCES ACCOUNTS (ACCOUNT_NAME),
+        WAREHOUSE_METERING (ACCOUNT_NAME) REFERENCES ACCOUNTS (ACCOUNT_NAME)
+    )
+    
+    FACTS (
+        -- Currency Cost Facts (actual dollar amounts)
+        USAGE_CURRENCY.usage_amount AS USAGE_CURRENCY.USAGE
+            WITH SYNONYMS ('credits used', 'usage credits')
+            COMMENT = 'Credits consumed for the service',
+        USAGE_CURRENCY.currency_amount AS USAGE_CURRENCY.USAGE_IN_CURRENCY
+            WITH SYNONYMS ('dollar amount', 'cost in currency', 'actual cost', 'spend')
+            COMMENT = 'Cost in actual currency (e.g., USD) — the real dollar spend',
+            
+        -- Contract Balance Facts
+        REMAINING_BALANCE.free_usage AS REMAINING_BALANCE.FREE_USAGE_BALANCE
+            WITH SYNONYMS ('free credits', 'trial balance')
+            COMMENT = 'Remaining free usage balance',
+        REMAINING_BALANCE.capacity_balance AS REMAINING_BALANCE.CAPACITY_BALANCE
+            WITH SYNONYMS ('prepaid balance', 'capacity remaining', 'committed balance')
+            COMMENT = 'Remaining prepaid capacity balance — tracks burn rate of committed spend',
+        REMAINING_BALANCE.on_demand_balance AS REMAINING_BALANCE.ON_DEMAND_CONSUMPTION_BALANCE
+            WITH SYNONYMS ('on demand balance', 'overage balance')
+            COMMENT = 'On-demand consumption balance — tracks overage beyond capacity',
+        REMAINING_BALANCE.rollover AS REMAINING_BALANCE.ROLLOVER_BALANCE
+            WITH SYNONYMS ('rollover credits', 'carried over')
+            COMMENT = 'Credits rolled over from previous contract period',
+            
+        -- Credit Metering Facts (per account)
+        METERING_DAILY.credits_used AS METERING_DAILY.CREDITS_USED
+            WITH SYNONYMS ('account credits', 'total credits')
+            COMMENT = 'Total credits consumed by this account and service type',
+        METERING_DAILY.credits_compute AS METERING_DAILY.CREDITS_USED_COMPUTE
+            WITH SYNONYMS ('compute credits')
+            COMMENT = 'Compute credits consumed',
+        METERING_DAILY.credits_cloud AS METERING_DAILY.CREDITS_USED_CLOUD_SERVICES
+            WITH SYNONYMS ('cloud service credits')
+            COMMENT = 'Cloud service credits consumed',
+        METERING_DAILY.credits_billed AS METERING_DAILY.CREDITS_BILLED
+            WITH SYNONYMS ('billed credits', 'net billed')
+            COMMENT = 'Actual billed credits after adjustments',
+            
+        -- Warehouse Metering Facts (per account per warehouse)
+        WAREHOUSE_METERING.wh_credits AS WAREHOUSE_METERING.CREDITS_USED
+            WITH SYNONYMS ('warehouse credits')
+            COMMENT = 'Credits consumed by this warehouse in this account',
+        WAREHOUSE_METERING.wh_compute_credits AS WAREHOUSE_METERING.CREDITS_USED_COMPUTE
+            WITH SYNONYMS ('warehouse compute')
+            COMMENT = 'Compute credits for this warehouse',
+        WAREHOUSE_METERING.wh_cloud_credits AS WAREHOUSE_METERING.CREDITS_USED_CLOUD_SERVICES
+            WITH SYNONYMS ('warehouse cloud credits')
+            COMMENT = 'Cloud service credits for this warehouse'
+    )
+    
+    DIMENSIONS (
+        -- Account Dimensions (from ACCOUNTS table)
+        ACCOUNTS.account_name AS ACCOUNTS.ACCOUNT_NAME
+            WITH SYNONYMS ('account', 'snowflake account', 'acct')
+            COMMENT = 'Snowflake account name',
+        ACCOUNTS.account_locator AS ACCOUNTS.ACCOUNT_LOCATOR
+            WITH SYNONYMS ('locator', 'account id')
+            COMMENT = 'Account locator identifier',
+        ACCOUNTS.region AS ACCOUNTS.REGION
+            WITH SYNONYMS ('account region', 'cloud region', 'deployment region')
+            COMMENT = 'Cloud region where the account is deployed',
+        ACCOUNTS.region_group AS ACCOUNTS.REGION_GROUP
+            WITH SYNONYMS ('region group')
+            COMMENT = 'Region group (e.g., PUBLIC)',
+        ACCOUNTS.edition AS ACCOUNTS.EDITION
+            WITH SYNONYMS ('account edition', 'tier', 'plan')
+            COMMENT = 'Snowflake edition: STANDARD, ENTERPRISE, BUSINESS_CRITICAL',
+        ACCOUNTS.is_org_admin AS ACCOUNTS.IS_ORG_ADMIN
+            WITH SYNONYMS ('org admin', 'admin account')
+            COMMENT = 'Whether this account has ORGADMIN privileges',
+        ACCOUNTS.is_locked AS ACCOUNTS.IS_LOCKED
+            WITH SYNONYMS ('locked', 'suspended account')
+            COMMENT = 'Whether the account is locked/suspended',
+        ACCOUNTS.account_created AS ACCOUNTS.CREATED_ON
+            WITH SYNONYMS ('account created', 'provisioned')
+            COMMENT = 'When the account was created',
+        ACCOUNTS.account_url AS ACCOUNTS.ACCOUNT_URL
+            WITH SYNONYMS ('url', 'account link')
+            COMMENT = 'URL for the account',
+            
+        -- Usage Currency Dimensions
+        USAGE_CURRENCY.usage_date AS USAGE_CURRENCY.USAGE_DATE
+            WITH SYNONYMS ('date', 'cost date', 'spend date')
+            COMMENT = 'Date of the usage record',
+        USAGE_CURRENCY.service_level AS USAGE_CURRENCY.SERVICE_LEVEL
+            WITH SYNONYMS ('service level', 'edition level')
+            COMMENT = 'Service level for the usage',
+        USAGE_CURRENCY.usage_type AS USAGE_CURRENCY.USAGE_TYPE
+            WITH SYNONYMS ('usage type', 'cost type', 'charge type')
+            COMMENT = 'Type of usage: compute, storage, data transfer, etc.',
+        USAGE_CURRENCY.currency AS USAGE_CURRENCY.CURRENCY
+            WITH SYNONYMS ('currency code', 'denomination')
+            COMMENT = 'Currency denomination (e.g., USD)',
+        USAGE_CURRENCY.balance_source AS USAGE_CURRENCY.BALANCE_SOURCE
+            WITH SYNONYMS ('billing source', 'payment source')
+            COMMENT = 'Source of balance: capacity, free usage, overage',
+        USAGE_CURRENCY.billing_type AS USAGE_CURRENCY.BILLING_TYPE
+            WITH SYNONYMS ('billing type', 'pricing model')
+            COMMENT = 'Billing model: usage, capacity, etc.',
+        USAGE_CURRENCY.service_type AS USAGE_CURRENCY.SERVICE_TYPE
+            WITH SYNONYMS ('service', 'feature')
+            COMMENT = 'Snowflake service type generating the cost',
+        USAGE_CURRENCY.rating_type AS USAGE_CURRENCY.RATING_TYPE
+            WITH SYNONYMS ('rating type')
+            COMMENT = 'How the usage is rated/priced',
+            
+        -- Remaining Balance Dimensions
+        REMAINING_BALANCE.contract_number AS REMAINING_BALANCE.CONTRACT_NUMBER
+            WITH SYNONYMS ('contract', 'contract id')
+            COMMENT = 'Contract number for balance tracking',
+        REMAINING_BALANCE.balance_date AS REMAINING_BALANCE.DATE
+            WITH SYNONYMS ('balance date', 'snapshot date')
+            COMMENT = 'Date of the balance snapshot',
+        REMAINING_BALANCE.balance_currency AS REMAINING_BALANCE.CURRENCY
+            WITH SYNONYMS ('balance currency')
+            COMMENT = 'Currency of the balance amounts',
+            
+        -- Metering Daily Dimensions
+        METERING_DAILY.metering_account AS METERING_DAILY.ACCOUNT_NAME
+            WITH SYNONYMS ('metered account')
+            COMMENT = 'Account being metered',
+        METERING_DAILY.metering_service AS METERING_DAILY.SERVICE_TYPE
+            WITH SYNONYMS ('metered service', 'service category')
+            COMMENT = 'Service type: WAREHOUSE_METERING, AUTO_CLUSTERING, SERVERLESS_TASK, etc.',
+        METERING_DAILY.metering_date AS METERING_DAILY.USAGE_DATE
+            WITH SYNONYMS ('metering date')
+            COMMENT = 'Date of the metering record',
+        METERING_DAILY.metering_region AS METERING_DAILY.REGION
+            WITH SYNONYMS ('metering region')
+            COMMENT = 'Region of the metered account',
+            
+        -- Warehouse Metering Dimensions
+        WAREHOUSE_METERING.wh_account AS WAREHOUSE_METERING.ACCOUNT_NAME
+            WITH SYNONYMS ('warehouse account')
+            COMMENT = 'Account owning the warehouse',
+        WAREHOUSE_METERING.wh_name AS WAREHOUSE_METERING.WAREHOUSE_NAME
+            WITH SYNONYMS ('warehouse', 'wh', 'compute cluster')
+            COMMENT = 'Name of the virtual warehouse',
+        WAREHOUSE_METERING.wh_start AS WAREHOUSE_METERING.START_TIME
+            WITH SYNONYMS ('warehouse start', 'metering start')
+            COMMENT = 'Start of the metering period',
+        WAREHOUSE_METERING.wh_end AS WAREHOUSE_METERING.END_TIME
+            WITH SYNONYMS ('warehouse end', 'metering end')
+            COMMENT = 'End of the metering period',
+        WAREHOUSE_METERING.wh_service_type AS WAREHOUSE_METERING.SERVICE_TYPE
+            WITH SYNONYMS ('warehouse service type')
+            COMMENT = 'Service type for warehouse metering',
+        WAREHOUSE_METERING.wh_region AS WAREHOUSE_METERING.REGION
+            WITH SYNONYMS ('warehouse region')
+            COMMENT = 'Region of the warehouse'
+    )
+    
+    METRICS (
+        -- Currency Cost Metrics (the real dollar numbers)
+        USAGE_CURRENCY.total_spend AS SUM(USAGE_CURRENCY.currency_amount)
+            WITH SYNONYMS ('total cost', 'total spend', 'total dollars')
+            COMMENT = 'Total spend in currency across all accounts and services',
+        USAGE_CURRENCY.total_credits AS SUM(USAGE_CURRENCY.usage_amount)
+            WITH SYNONYMS ('total usage credits')
+            COMMENT = 'Total credits consumed across all accounts',
+        USAGE_CURRENCY.avg_daily_spend AS AVG(USAGE_CURRENCY.currency_amount)
+            WITH SYNONYMS ('average daily cost', 'avg spend')
+            COMMENT = 'Average daily spend in currency',
+            
+        -- Contract Balance Metrics
+        REMAINING_BALANCE.latest_capacity AS MAX(REMAINING_BALANCE.capacity_balance)
+            WITH SYNONYMS ('current capacity', 'remaining prepaid')
+            COMMENT = 'Latest capacity balance (use with MAX date filter)',
+        REMAINING_BALANCE.latest_on_demand AS MAX(REMAINING_BALANCE.on_demand_balance)
+            WITH SYNONYMS ('current overage')
+            COMMENT = 'Latest on-demand balance',
+            
+        -- Credit Metering Metrics (per account comparison)
+        METERING_DAILY.total_org_credits AS SUM(METERING_DAILY.credits_used)
+            WITH SYNONYMS ('org total credits', 'organization credits')
+            COMMENT = 'Total credits across all accounts in the organization',
+        METERING_DAILY.total_org_billed AS SUM(METERING_DAILY.credits_billed)
+            WITH SYNONYMS ('org total billed')
+            COMMENT = 'Total billed credits across the organization',
+        METERING_DAILY.account_count AS COUNT(DISTINCT METERING_DAILY.metering_account)
+            WITH SYNONYMS ('number of accounts', 'active accounts')
+            COMMENT = 'Number of accounts consuming credits',
+            
+        -- Warehouse Metrics (cross-account)
+        WAREHOUSE_METERING.total_wh_credits AS SUM(WAREHOUSE_METERING.wh_credits)
+            WITH SYNONYMS ('total warehouse cost', 'org warehouse credits')
+            COMMENT = 'Total warehouse credits across all accounts',
+        WAREHOUSE_METERING.warehouse_count AS COUNT(DISTINCT WAREHOUSE_METERING.wh_name)
+            WITH SYNONYMS ('number of warehouses')
+            COMMENT = 'Number of distinct warehouses across accounts',
+        WAREHOUSE_METERING.avg_wh_credits AS AVG(WAREHOUSE_METERING.wh_credits)
+            WITH SYNONYMS ('average warehouse cost')
+            COMMENT = 'Average credits per warehouse metering period'
+    )
+    
+    COMMENT = 'Organization-level analytics for cross-account cost comparison, contract balance tracking, and currency-denominated spending across all Snowflake accounts in the organization'
+    AI_SQL_GENERATION 'Always filter with "_IS_CURRENT" = TRUE to get current records. Use USAGE_DATE or DATE for time-based filtering. USAGE_IN_CURRENCY is the actual dollar amount — use this for real cost analysis. CREDITS_USED is the credit consumption before currency conversion. CAPACITY_BALANCE tracks remaining prepaid credits — when it approaches zero, overage charges begin on ON_DEMAND_CONSUMPTION_BALANCE. To compare accounts, GROUP BY ACCOUNT_NAME. To see cost trends, GROUP BY DATE_TRUNC(month, USAGE_DATE). SERVICE_TYPE values include: WAREHOUSE_METERING, AUTO_CLUSTERING, SERVERLESS_TASK, MATERIALIZED_VIEW, PIPE, SEARCH_OPTIMIZATION. EDITION values: STANDARD, ENTERPRISE, BUSINESS_CRITICAL. For contract burn rate, calculate daily capacity decrease over time. The ACCOUNTS table links all cost data to account metadata (region, edition, admin status).'
+    AI_QUESTION_CATEGORIZATION 'This semantic view answers questions about: Cross-account cost comparison (which accounts cost the most?), Currency-denominated spending (actual dollar amounts, not just credits), Contract balance tracking and burn rate, Capacity remaining and overage monitoring, Per-account warehouse costs, Organization-wide credit consumption trends, Account inventory and metadata (region, edition, locked status), Cost breakdown by service type across accounts, Monthly and daily spending trends across the organization.';
+
+
+-- =============================================================================
 -- GRANTS
 -- =============================================================================
 

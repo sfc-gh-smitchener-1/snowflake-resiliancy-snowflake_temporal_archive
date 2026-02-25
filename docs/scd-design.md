@@ -35,7 +35,7 @@ Day 90: User JOHN promoted to MANAGER
 
 ## SCD Columns
 
-Every archive table includes these standard columns:
+Every archive table includes these standard columns, positioned **first** in the table definition (before source columns). This SCD-first layout enables `INSERT ... SELECT` without explicit column lists, since `ALTER TABLE ADD COLUMN` (from schema evolution) always appends to the end — which is the correct position for new source columns.
 
 | Column | Type | Purpose |
 |--------|------|---------|
@@ -88,8 +88,8 @@ The load procedure selects a strategy per view from VIEW_REGISTRY:
          ▼                     ▼                      ▼
 ┌──────────────────┐ ┌──────────────────┐  ┌──────────────────┐
 │  APPEND_ONLY     │ │ SOFT_DELETE      │  │  FULL_COMPARE    │
-│  (38 views)      │ │ _MUTABLE         │  │  (13 views)      │
-│                  │ │ (33 views)       │  │                  │
+│  (57 views)      │ │ _MUTABLE         │  │  (10 views)      │
+│                  │ │ (40 views)       │  │                  │
 │ 1. Read watermark│ │ 1. Create temp   │  │ 1. Compute hash  │
 │    from state    │ │    table with    │  │    for all source │
 │ 2. Query rows    │ │    source hashes │  │ 2. Compare with  │
@@ -215,12 +215,12 @@ Returns summary:
 ```json
 {
   "start_time": "2025-01-15 06:00:00",
-  "end_time": "2025-01-15 06:13:00",
-  "duration_seconds": 801,
-  "views_in_registry": 113,
-  "active_views": 84,
-  "views_processed": 84,
-  "success_count": 84,
+  "end_time": "2025-01-15 06:18:33",
+  "duration_seconds": 823,
+  "run_id": 1,
+  "views_in_registry": 98,
+  "views_processed": 98,
+  "success_count": 98,
   "error_count": 0,
   "total_updated": 536,
   "total_inserted": 9034,
@@ -245,11 +245,11 @@ SELECT * FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY;
 | ORGANIZATION_USAGE | WAREHOUSE_METERING_HISTORY | FALSE | APPEND_ONLY | START_TIME | NULL |
 | ... | ... | ... | ... | ... | ... |
 
-**View Counts**: 113 total (84 active, 29 deactivated)
-- **38 APPEND_ONLY**: Time-series views with watermark-based delta loading
-- **33 SOFT_DELETE_MUTABLE**: Mutable views with full SCD2 via temp table
-- **13 FULL_COMPARE**: Fallback hash comparison for views without clear keys
-- **29 deactivated**: ORGANIZATION_USAGE (21), DATA_SHARING_USAGE (3), READER_ACCOUNT_USAGE (5) - return 0 rows but take 3-8 min each
+**View Counts**: 133 total (107 active, 26 deactivated)
+- **57 APPEND_ONLY**: Time-series views with watermark-based delta loading
+- **40 SOFT_DELETE_MUTABLE**: Mutable views with full SCD2 via temp table
+- **10 FULL_COMPARE**: Fallback hash comparison for views without clear keys
+- **26 deactivated**: DATA_SHARING_USAGE (3), READER_ACCOUNT_USAGE (5), ORGANIZATION_USAGE (12 remaining inactive), non-existent/secure ACCOUNT_USAGE (6)
 
 To disable a view:
 
@@ -292,14 +292,16 @@ On each APPEND_ONLY load, the procedure:
 
 ### Clustering Keys
 
-For large archive tables, add clustering:
+For large archive tables, clustering is automatically applied during deployment:
 
 ```sql
 ALTER TABLE TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE 
-CLUSTER BY ("_IS_CURRENT", "_VALID_FROM");
+CLUSTER BY ("_IS_CURRENT", "_LOADED_AT");
 ```
 
-Recommended for tables > 1TB with frequent queries on current state.
+The following 7 tables are clustered by default: COLUMNS_ARCHIVE, QUERY_HISTORY_ARCHIVE,
+AGGREGATE_QUERY_HISTORY_ARCHIVE, ACCESS_HISTORY_ARCHIVE, AGGREGATE_ACCESS_HISTORY_ARCHIVE,
+TABLES_ARCHIVE, VIEWS_ARCHIVE.
 
 ### Partitioning Queries
 
@@ -356,11 +358,18 @@ LIMIT 5;
 
 ### Load Failures
 
-Check the load log:
+Check the load log for per-view detail rows grouped by RUN_ID:
 
 ```sql
-SELECT *
-FROM TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG
-WHERE STATUS != 'SUCCESS'
-ORDER BY LOAD_TIMESTAMP DESC;
+-- Latest run summary
+SELECT * FROM TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG
+WHERE LOAD_STRATEGY = 'SUMMARY'
+ORDER BY LOAD_TIMESTAMP DESC LIMIT 1;
+
+-- Detail rows for a specific run
+SELECT * FROM TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG
+WHERE RUN_ID = (SELECT MAX(RUN_ID) FROM TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG)
+  AND LOAD_STRATEGY != 'SUMMARY'
+  AND STATUS != 'success'
+ORDER BY SOURCE_TABLE;
 ```

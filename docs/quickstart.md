@@ -4,15 +4,15 @@
 
 ## Overview
 
-In this quickstart, you will deploy a complete **Temporal Archive** solution that extends your Snowflake ACCOUNT_USAGE retention from 1 year to 7+ years using SCD Type 2 archiving. You'll also deploy 9 AI-ready semantic views for natural language analytics with Cortex Analyst.
+In this quickstart, you will deploy a complete **Temporal Archive** solution that extends your Snowflake ACCOUNT_USAGE retention from 1 year to 7+ years using SCD Type 2 archiving. You'll also deploy 10 AI-ready semantic views for natural language analytics with Cortex Analyst.
 
 ### What You'll Build
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  TEMPORAL_ARCHIVE Database                                              │
-│  ├── 84 Active SCD Type 2 Archive Tables (7+ year retention via SCD) │
-│  ├── 9 Semantic Views (AI-ready for Cortex Analyst)                     │
+│  ├── 107 Active SCD Type 2 Archive Tables (7+ year retention via SCD) │
+│  ├── 10 Semantic Views (AI-ready for Cortex Analyst)                    │
 │  ├── Automated Load Tasks (6 AM & 6 PM daily)                           │
 │  └── [Optional] WORM Backup Policy (Business Critical Edition only)     │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -258,9 +258,9 @@ The Temporal Archive skill automatically:
 |------|--------------|
 | 1 | Creates database, warehouse, and roles |
 | 2 | Creates 4 schemas (ARCHIVE, ACCOUNT_USAGE, ORGANIZATION_USAGE, SEMANTIC) |
-| 3 | Registers 113 ACCOUNT_USAGE views for archiving (84 active) |
+| 3 | Registers 133 ACCOUNT_USAGE views for archiving (107 active) |
 | 4 | Creates SCD Type 2 load procedures |
-| 5 | Deploys 9 semantic views for Cortex Analyst |
+| 5 | Deploys 10 semantic views for Cortex Analyst |
 | 6 | Creates scheduled tasks (morning + evening loads) |
 | 7 | Runs initial data load |
 | 8 | Verifies deployment |
@@ -273,12 +273,12 @@ Cortex Code shows real-time progress as it executes each step. You'll see output
 ✓ Created database TEMPORAL_ARCHIVE
 ✓ Created warehouse TEMPORAL_ARCHIVE_WH
 ✓ Created roles (DATA_ADMIN, TEMPORAL_ARCHIVE_READER, TEMPORAL_ARCHIVE_WRITER)
-✓ Created VIEW_REGISTRY with 113 source views (84 active)
-✓ Created LOAD_VIEW_ARCHIVE procedure
-✓ Created 9 semantic views
+✓ Created VIEW_REGISTRY with 133 source views (107 active)
+✓ Created SCD Type 2 procedures
+✓ Created 10 semantic views
 ✓ Created scheduled tasks
 ✓ Running initial data load...
-✓ Loaded 84 active archive tables
+✓ Loaded 107 active archive tables
 ✓ Deployment complete!
 ```
 
@@ -398,7 +398,7 @@ CREATE DATABASE IF NOT EXISTS TEMPORAL_ARCHIVE
     COMMENT = 'Snowflake Temporal Archive - SCD Type 2 history with 7+ year retention';
 
 -- Create a dedicated warehouse
--- LARGE Gen2 recommended for production (84 active views, 3-strategy delta load)
+-- LARGE Gen2 recommended for production (107 active views, 3-strategy delta load)
 -- Use SMALL for quickstart/testing with smaller subsets
 CREATE WAREHOUSE IF NOT EXISTS TEMPORAL_ARCHIVE_WH
     WAREHOUSE_SIZE = 'LARGE'

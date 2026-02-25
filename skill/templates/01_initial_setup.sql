@@ -68,10 +68,7 @@ CREATE SCHEMA IF NOT EXISTS {{DATABASE_NAME}}.{{READER_ACCOUNT_SCHEMA}}
     COMMENT = 'Archive of SNOWFLAKE.READER_ACCOUNT_USAGE views';
 
 CREATE SCHEMA IF NOT EXISTS {{DATABASE_NAME}}.{{SEMANTIC_SCHEMA}}
-    COMMENT = 'Semantic views for Cortex Analyst natural language queries';
-
-CREATE SCHEMA IF NOT EXISTS {{DATABASE_NAME}}.{{AGENTS_SCHEMA}}
-    COMMENT = 'Cortex Agents for AI-powered account analysis';
+    COMMENT = 'Semantic views and Cortex Agent for AI-powered account analysis';
 
 CREATE SCHEMA IF NOT EXISTS {{DATABASE_NAME}}.{{STREAMLIT_SCHEMA}}
     COMMENT = 'Streamlit application and supporting objects';
@@ -101,7 +98,7 @@ GRANT EXECUTE TASK ON ACCOUNT TO ROLE {{ADMIN_ROLE}};
 
 GRANT EXECUTE MANAGED TASK ON ACCOUNT TO ROLE {{ADMIN_ROLE}};
 
-GRANT CREATE AGENT ON SCHEMA {{DATABASE_NAME}}.{{AGENTS_SCHEMA}} TO ROLE {{ADMIN_ROLE}};
+GRANT CREATE AGENT ON SCHEMA {{DATABASE_NAME}}.{{SEMANTIC_SCHEMA}} TO ROLE {{ADMIN_ROLE}};
 
 
 -- =============================================================================

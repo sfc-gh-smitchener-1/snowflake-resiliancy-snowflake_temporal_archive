@@ -9,8 +9,8 @@ Detailed technical architecture of the Snowflake Temporal Archive solution.
 │                              DATA FLOW ARCHITECTURE                             │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
-    SNOWFLAKE.ACCOUNT_USAGE (84 active views)
-    SNOWFLAKE.ORGANIZATION_USAGE (21 views - deactivated)
+    SNOWFLAKE.ACCOUNT_USAGE (98 active views)
+    SNOWFLAKE.ORGANIZATION_USAGE (9 active views)
     SNOWFLAKE.DATA_SHARING_USAGE (3 views - deactivated)
     SNOWFLAKE.READER_ACCOUNT_USAGE (5 views - deactivated)
                     │
@@ -22,9 +22,9 @@ Detailed technical architecture of the Snowflake Temporal Archive solution.
     │                                                                   │
     │  ┌────────────────────────────────────────────────────────────┐   │
     │  │ ARCHIVE Schema                                             │   │
-    │  │ • VIEW_REGISTRY (113 views: 84 active, 29 deactivated)    │   │
+    │  │ • VIEW_REGISTRY (133 views: 107 active, 26 deactivated)    │   │
     │  │ • WATERMARK_STATE (delta load tracking per view)           │   │
-    │  │ • LOAD_LOG (execution history)                             │   │
+    │  │ • LOAD_LOG (per-view detail rows + summary, RUN_ID)       │   │
     │  │ • RUN_SCD_LOAD() procedure                                 │   │
     │  │ • LOAD_VIEW_ARCHIVE() - 3-strategy SCD loader              │   │
     │  │ • TASK_SCD_LOAD_MORNING (6 AM)                             │   │
@@ -38,12 +38,12 @@ Detailed technical architecture of the Snowflake Temporal Archive solution.
     │  │ • USERS_ARCHIVE                                            │   │
     │  │ • LOGIN_HISTORY_ARCHIVE                                    │   │
     │  │ • WAREHOUSE_METERING_HISTORY_ARCHIVE                       │   │
-    │  │ • ... (84 active archive tables)                           │   │
+    │  │ • ... (98 active archive tables)                           │   │
     │  └────────────────────────────────────────────────────────────┘   │
     │                           │                                       │
     │                           ▼                                       │
     │  ┌────────────────────────────────────────────────────────────┐   │
-    │  │ SEMANTIC Schema (9 Semantic Views)                         │   │
+    │  │ SEMANTIC Schema (10 Semantic Views + Cortex Agent)          │   │
     │  │ • WAREHOUSE_COST_ANALYTICS                                 │   │
     │  │ • SERVERLESS_COST_ANALYTICS                                │   │
     │  │ • COST_ANALYTICS                                           │   │
@@ -53,14 +53,8 @@ Detailed technical architecture of the Snowflake Temporal Archive solution.
     │  │ • TASK_ANALYTICS                                           │   │
     │  │ • BCDR_ANALYTICS                                           │   │
     │  │ • QUERY_PERFORMANCE_ANALYTICS                              │   │
-    │  └────────────────────────────────────────────────────────────┘   │
-    │                           │                                       │
-    │                           ▼                                       │
-    │  ┌────────────────────────────────────────────────────────────┐   │
-    │  │ AGENTS Schema                                              │   │
-    │  │ • SNOWFLAKE_INTELLIGENCE (Cortex Agent)                    │   │
-    │  │   - 8 tools mapping to semantic views                      │   │
-    │  │   - Natural language query interface                       │   │
+    │  │ • ORGANIZATION_ANALYTICS                                   │   │
+    │  │ • SNOWFLAKEACCOUNTARCHIVE (Cortex Agent, 10 tools)         │   │
     │  └────────────────────────────────────────────────────────────┘   │
     │                                                                   │
     │  ┌────────────────────────────────────────────────────────────┐   │
@@ -85,8 +79,7 @@ Detailed technical architecture of the Snowflake Temporal Archive solution.
 | ORGANIZATION_USAGE | SCD Type 2 tables from SNOWFLAKE.ORGANIZATION_USAGE |
 | DATA_SHARING_USAGE | SCD Type 2 tables from SNOWFLAKE.DATA_SHARING_USAGE |
 | READER_ACCOUNT_USAGE | SCD Type 2 tables from SNOWFLAKE.READER_ACCOUNT_USAGE |
-| SEMANTIC | Semantic views for Cortex Analyst |
-| AGENTS | Cortex Agents |
+| SEMANTIC | Semantic views for Cortex Analyst + Cortex Agent |
 | STREAMLIT | Streamlit application objects |
 
 ### Role Hierarchy
@@ -157,9 +150,9 @@ The procedure selects a strategy per view based on VIEW_REGISTRY configuration:
               │                │                 │
               ▼                ▼                 ▼
    ┌──────────────────┐ ┌────────────────┐ ┌──────────────────┐
-   │  APPEND_ONLY     │ │ SOFT_DELETE    │ │  FULL_COMPARE    │
-   │  (38 views)      │ │ _MUTABLE      │ │  (13 views)      │
-   │                  │ │ (33 views)     │ │                  │
+    │  APPEND_ONLY     │ │ SOFT_DELETE    │ │  FULL_COMPARE    │
+    │  (57 views)      │ │ _MUTABLE      │ │  (10 views)      │
+    │                  │ │ (40 views)     │ │                  │
    │ Watermark-based  │ │ Full SCD2 via  │ │ Hash comparison  │
    │ delta: only load │ │ temp table:    │ │ fallback: scan   │
    │ rows after last  │ │ single-scan    │ │ all current rows │
@@ -260,14 +253,33 @@ CREATE BACKUP POLICY TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY
 3. **Consider clustering** on large archive tables:
 
 ```sql
-ALTER TABLE QUERY_HISTORY_ARCHIVE CLUSTER BY ("_IS_CURRENT", "_VALID_FROM");
+ALTER TABLE QUERY_HISTORY_ARCHIVE CLUSTER BY ("_IS_CURRENT", "_LOADED_AT");
 ```
+
+> **Note**: The 7 largest archive tables (COLUMNS, QUERY_HISTORY, AGGREGATE_QUERY_HISTORY,
+> ACCESS_HISTORY, AGGREGATE_ACCESS_HISTORY, TABLES, VIEWS) are automatically clustered
+> by `(_IS_CURRENT, _LOADED_AT)` during deployment.
+
+### Schema Evolution
+
+Snowflake periodically adds columns to ACCOUNT_USAGE views. The `LOAD_VIEW_ARCHIVE` procedure
+automatically detects new source columns that don't exist in the archive table and adds them
+as `VARIANT` type before proceeding with the INSERT. This prevents column count mismatch errors
+without manual intervention.
+
+### Per-View Logging
+
+Each pipeline run generates a `RUN_ID` that groups individual per-view detail rows in `LOAD_LOG`.
+A summary row with `LOAD_STRATEGY = 'SUMMARY'` captures overall statistics. This enables:
+- Fast identification of which specific view caused a PARTIAL_FAILURE
+- Per-view duration tracking for performance optimization
+- Strategy distribution analysis across runs
 
 ### Warehouse Sizing
 
 | Use Case | Recommended Size |
 |----------|-----------------|
-| Production loads (84 active views) | LARGE Standard Gen2 |
+| Production loads (107 active views) | LARGE Standard Gen2 |
 | Initial load (large account) | LARGE Standard Gen2 |
 | Complex analytical queries | Medium+ |
 
@@ -278,7 +290,7 @@ ALTER TABLE QUERY_HISTORY_ARCHIVE CLUSTER BY ("_IS_CURRENT", "_VALID_FROM");
 ### Storage Estimation
 
 Archive storage grows based on:
-- Number of active source views (84 active baseline)
+- Number of active source views (107 active baseline)
 - Data change frequency
 - Historical record accumulation
 

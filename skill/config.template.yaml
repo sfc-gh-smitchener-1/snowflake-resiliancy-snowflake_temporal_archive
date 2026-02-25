@@ -29,8 +29,7 @@ account_usage_schema: ACCOUNT_USAGE       # SCD tables from SNOWFLAKE.ACCOUNT_US
 organization_usage_schema: ORGANIZATION_USAGE
 data_sharing_schema: DATA_SHARING_USAGE
 reader_account_schema: READER_ACCOUNT_USAGE
-semantic_schema: SEMANTIC                 # Semantic views for Cortex Analyst
-agents_schema: AGENTS                     # Cortex Agents
+semantic_schema: SEMANTIC                 # Semantic views for Cortex Analyst + Agent
 streamlit_schema: STREAMLIT               # Streamlit app objects
 
 # =============================================================================
@@ -54,7 +53,7 @@ timezone: America/New_York                # Timezone for task scheduling
 # =============================================================================
 # AGENT CONFIGURATION
 # =============================================================================
-agent_name: SNOWFLAKE_INTELLIGENCE
+agent_name: SNOWFLAKEACCOUNTARCHIVE
 agent_timeout_seconds: 900                # 15 minute timeout
 agent_token_budget: 400000                # Token budget for agent responses
 query_timeout_seconds: 299                # Per-query timeout

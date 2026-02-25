@@ -36,17 +36,23 @@ USE WAREHOUSE TEMPORAL_ARCHIVE_WH;
 
 CREATE TABLE IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG (
     LOG_ID                  NUMBER AUTOINCREMENT,
+    RUN_ID                  NUMBER,
     SOURCE_TABLE            VARCHAR(512),
     TARGET_TABLE            VARCHAR(512),
     ROWS_UPDATED            NUMBER,
     ROWS_INSERTED           NUMBER,
     STATUS                  VARCHAR(50),
     ERROR_MESSAGE           VARCHAR(4096),
-    DURATION_SECONDS        NUMBER,
+    DURATION_SECONDS        NUMBER(10,2),
+    LOAD_STRATEGY           VARCHAR(30),
     LOAD_TIMESTAMP          TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
     "_ROW_HASH"             VARCHAR(64)
 )
-COMMENT = 'Log of SCD load executions';
+COMMENT = 'Log of SCD load executions - per-view detail rows grouped by RUN_ID';
+
+-- Add columns if table already exists (idempotent migration)
+ALTER TABLE TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG ADD COLUMN IF NOT EXISTS RUN_ID NUMBER;
+ALTER TABLE TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG ADD COLUMN IF NOT EXISTS LOAD_STRATEGY VARCHAR(30);
 
 -- =============================================================================
 -- WATERMARK STATE TABLE
@@ -207,12 +213,18 @@ INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW, 
 ('ACCOUNT_USAGE', 'TAG_REFERENCES', 'FULL_COMPARE'),
 ('ACCOUNT_USAGE', 'DATA_METRIC_FUNCTION_REFERENCES', 'FULL_COMPARE'),
 ('ACCOUNT_USAGE', 'TABLE_STORAGE_METRICS', 'FULL_COMPARE'),
-('ACCOUNT_USAGE', 'RESOURCE_MONITORS', 'FULL_COMPARE'),
-('ACCOUNT_USAGE', 'WAREHOUSES', 'FULL_COMPARE'),
-('ACCOUNT_USAGE', 'INTEGRATIONS', 'FULL_COMPARE'),
-('ACCOUNT_USAGE', 'STREAMS', 'FULL_COMPARE'),
-('ACCOUNT_USAGE', 'TASKS', 'FULL_COMPARE'),
-('ACCOUNT_USAGE', 'ALERTS', 'FULL_COMPARE');
+('ACCOUNT_USAGE', 'RESOURCE_MONITORS', 'FULL_COMPARE');
+
+-- DEACTIVATED: These views do not exist, are secure objects not accessible under
+-- DATA_ADMIN role, or have been renamed/removed by Snowflake.
+-- Re-activate if Snowflake re-introduces them: UPDATE VIEW_REGISTRY SET IS_ACTIVE = TRUE WHERE ...
+INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW, IS_ACTIVE, LOAD_STRATEGY) VALUES
+('ACCOUNT_USAGE', 'WAREHOUSES', FALSE, 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'INTEGRATIONS', FALSE, 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'STREAMS', FALSE, 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'TASKS', FALSE, 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'ALERTS', FALSE, 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'LISTINGS', FALSE, 'SOFT_DELETE_MUTABLE');
 
 -- =============================================================================
 -- ORGANIZATION_USAGE views
@@ -266,6 +278,44 @@ INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW, 
 
 INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW, IS_ACTIVE, LOAD_STRATEGY) VALUES
 ('READER_ACCOUNT_USAGE', 'RESOURCE_MONITORS', FALSE, 'FULL_COMPARE');
+
+-- =============================================================================
+-- ACCOUNT_USAGE: Additional high-value views discovered in the account
+-- These were not in the original registry but exist in SNOWFLAKE.ACCOUNT_USAGE.
+-- =============================================================================
+INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW, LOAD_STRATEGY, WATERMARK_COLUMN, UNIQUE_KEY_COLUMN) VALUES
+-- Cortex and AI usage (expanding coverage)
+('ACCOUNT_USAGE', 'CORTEX_ANALYST_USAGE_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'CORTEX_REST_API_USAGE_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'CORTEX_FINE_TUNING_USAGE_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'CORTEX_DOCUMENT_PROCESSING_USAGE_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+-- Backup and snapshot history
+('ACCOUNT_USAGE', 'BACKUP_OPERATION_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+('ACCOUNT_USAGE', 'SNAPSHOT_OPERATION_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+-- Application usage
+('ACCOUNT_USAGE', 'APPLICATION_DAILY_USAGE_HISTORY', 'APPEND_ONLY', 'USAGE_DATE', NULL),
+-- Additional data loading
+('ACCOUNT_USAGE', 'COPY_FILES_HISTORY', 'APPEND_ONLY', 'LAST_LOAD_TIME', NULL),
+('ACCOUNT_USAGE', 'SNOWPIPE_STREAMING_CHANNEL_HISTORY', 'APPEND_ONLY', 'EVENT_TIMESTAMP', NULL),
+-- Container and network
+('ACCOUNT_USAGE', 'NOTEBOOKS_CONTAINER_RUNTIME_HISTORY', 'APPEND_ONLY', 'START_TIME', NULL),
+-- Query insights
+('ACCOUNT_USAGE', 'QUERY_INSIGHTS', 'APPEND_ONLY', 'START_TIME', NULL),
+-- Serverless
+('ACCOUNT_USAGE', 'SERVERLESS_ALERT_HISTORY', 'APPEND_ONLY', 'SCHEDULED_TIME', NULL);
+
+INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW, LOAD_STRATEGY, WATERMARK_COLUMN, UNIQUE_KEY_COLUMN) VALUES
+-- Catalog objects (mutable)
+('ACCOUNT_USAGE', 'REPLICATION_GROUPS', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'REPLICATION_GROUP_ID'),
+('ACCOUNT_USAGE', 'SECRETS', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', NULL),
+('ACCOUNT_USAGE', 'CREDENTIALS', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', NULL),
+('ACCOUNT_USAGE', 'SNAPSHOT_POLICIES', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', 'ID'),
+('ACCOUNT_USAGE', 'CONTACTS', 'SOFT_DELETE_MUTABLE', 'LAST_ALTERED', NULL);
+
+INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (SOURCE_SCHEMA, SOURCE_VIEW, LOAD_STRATEGY) VALUES
+-- Grant and share visibility
+('ACCOUNT_USAGE', 'GRANTS_TO_SHARES', 'FULL_COMPARE'),
+('ACCOUNT_USAGE', 'CALLER_GRANTS_TO_ROLES', 'FULL_COMPARE');
 
 -- =============================================================================
 -- PROCEDURE: LOAD_VIEW_ARCHIVE
@@ -361,14 +411,14 @@ BEGIN
             )
             SELECT 
                 ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS "_ARCHIVE_ID",
-                * EXCLUDE _obj,
                 SHA2(TO_JSON(_obj), 256) AS "_ROW_HASH",
                 CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_LOADED_AT",
                 ''SNOWFLAKE_' || v_schema || ''' AS "_SOURCE_SYSTEM",
                 ''' || v_view || ''' AS "_SOURCE_TABLE",
                 TRUE AS "_IS_CURRENT",
                 CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_VALID_FROM",
-                ''9999-12-31 23:59:59''::TIMESTAMP_NTZ AS "_VALID_TO"
+                ''9999-12-31 23:59:59''::TIMESTAMP_NTZ AS "_VALID_TO",
+                * EXCLUDE _obj
             FROM src_with_hash';
         
         EXECUTE IMMEDIATE v_create_sql;
@@ -403,6 +453,37 @@ BEGIN
     -- =========================================================================
     -- INCREMENTAL LOAD - branch by strategy
     -- =========================================================================
+    
+    -- =========================================================================
+    -- SCHEMA EVOLUTION: Detect new columns added to source view since initial
+    -- load. Snowflake may add columns to ACCOUNT_USAGE views over time.
+    -- Add them to the archive table before proceeding with INSERT.
+    -- =========================================================================
+    BEGIN
+        LET v_evolve_sql VARCHAR;
+        LET v_col_name VARCHAR;
+        LET v_col_type VARCHAR;
+        LET evolve_cur CURSOR FOR 
+            SELECT c.COLUMN_NAME, c.DATA_TYPE
+            FROM SNOWFLAKE.INFORMATION_SCHEMA.COLUMNS c
+            WHERE c.TABLE_SCHEMA = :v_schema AND c.TABLE_NAME = :v_view
+              AND c.COLUMN_NAME NOT IN (
+                  SELECT ac.COLUMN_NAME 
+                  FROM TEMPORAL_ARCHIVE.INFORMATION_SCHEMA.COLUMNS ac
+                  WHERE ac.TABLE_SCHEMA = :v_target_schema AND ac.TABLE_NAME = :v_target_table
+              )
+            ORDER BY c.ORDINAL_POSITION;
+        OPEN evolve_cur;
+        FETCH evolve_cur INTO v_col_name, v_col_type;
+        WHILE (v_col_name IS NOT NULL) DO
+            v_evolve_sql := 'ALTER TABLE ' || v_target_fqn || ' ADD COLUMN "' || v_col_name || '" ' || v_col_type;
+            EXECUTE IMMEDIATE v_evolve_sql;
+            v_col_name := NULL;
+            FETCH evolve_cur INTO v_col_name, v_col_type;
+        END WHILE;
+        CLOSE evolve_cur;
+    EXCEPTION WHEN OTHER THEN NULL;
+    END;
     
     -- Get last watermark value
     IF (v_watermark_column IS NOT NULL) THEN
@@ -450,14 +531,14 @@ BEGIN
             INSERT INTO ' || v_target_fqn || '
             SELECT 
                 ' || v_max_id || ' + ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS "_ARCHIVE_ID",
-                * EXCLUDE "_SRC_ROW_HASH",
                 "_SRC_ROW_HASH" AS "_ROW_HASH",
                 CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_LOADED_AT",
                 ''SNOWFLAKE_' || v_schema || ''' AS "_SOURCE_SYSTEM",
                 ''' || v_view || ''' AS "_SOURCE_TABLE",
                 TRUE AS "_IS_CURRENT",
                 CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_VALID_FROM",
-                ''9999-12-31 23:59:59''::TIMESTAMP_NTZ AS "_VALID_TO"
+                ''9999-12-31 23:59:59''::TIMESTAMP_NTZ AS "_VALID_TO",
+                * EXCLUDE "_SRC_ROW_HASH"
             FROM ' || v_temp_table;
         
         EXECUTE IMMEDIATE v_insert_sql;
@@ -542,14 +623,14 @@ BEGIN
         INSERT INTO ' || v_target_fqn || '
         SELECT 
             ' || v_max_id || ' + ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS "_ARCHIVE_ID",
-            * EXCLUDE "_SRC_ROW_HASH",
             "_SRC_ROW_HASH" AS "_ROW_HASH",
             CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_LOADED_AT",
             ''SNOWFLAKE_' || v_schema || ''' AS "_SOURCE_SYSTEM",
             ''' || v_view || ''' AS "_SOURCE_TABLE",
             TRUE AS "_IS_CURRENT",
             CURRENT_TIMESTAMP()::TIMESTAMP_NTZ AS "_VALID_FROM",
-            ''9999-12-31 23:59:59''::TIMESTAMP_NTZ AS "_VALID_TO"
+            ''9999-12-31 23:59:59''::TIMESTAMP_NTZ AS "_VALID_TO",
+            * EXCLUDE "_SRC_ROW_HASH"
         FROM ' || v_temp_table || ' src
         WHERE NOT EXISTS (
             SELECT 1 FROM ' || v_target_fqn || ' tgt
@@ -696,6 +777,8 @@ $$
 DECLARE
     start_time TIMESTAMP_NTZ;
     end_time TIMESTAMP_NTZ;
+    view_start_time TIMESTAMP_NTZ;
+    view_end_time TIMESTAMP_NTZ;
     results ARRAY DEFAULT ARRAY_CONSTRUCT();
     table_result VARIANT;
     total_updated INTEGER DEFAULT 0;
@@ -706,6 +789,8 @@ DECLARE
     views_processed INTEGER DEFAULT 0;
     v_source_schema VARCHAR;
     v_source_view VARCHAR;
+    v_run_id INTEGER;
+    v_view_strategy VARCHAR;
     -- Cursor reads from VIEW_REGISTRY to ensure we get ALL views
     cur CURSOR FOR 
         SELECT 
@@ -717,16 +802,31 @@ DECLARE
 BEGIN
     start_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
     
+    -- Generate a run ID to group all detail rows for this execution
+    SELECT COALESCE(MAX(RUN_ID), 0) + 1 INTO :v_run_id FROM TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG;
+    
     -- Process all views from the registry
     OPEN cur;
     FETCH cur INTO v_source_schema, v_source_view;
     WHILE (v_source_schema IS NOT NULL) DO
+        
+        view_start_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
+        
+        -- Get strategy for logging
+        BEGIN
+            SELECT LOAD_STRATEGY INTO :v_view_strategy
+            FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY
+            WHERE SOURCE_SCHEMA = :v_source_schema AND SOURCE_VIEW = :v_source_view;
+        EXCEPTION WHEN OTHER THEN
+            v_view_strategy := 'UNKNOWN';
+        END;
         
         CALL TEMPORAL_ARCHIVE.ARCHIVE.LOAD_VIEW_ARCHIVE(
             :v_source_schema,
             :v_source_view
         ) INTO table_result;
         
+        view_end_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
         results := ARRAY_APPEND(results, table_result);
         views_processed := views_processed + 1;
         
@@ -740,6 +840,31 @@ BEGIN
             error_count := error_count + 1;
         END IF;
         
+        -- Log per-view detail row
+        LET v_log_rows_upd INTEGER := COALESCE(table_result:rows_updated::INTEGER, 0);
+        LET v_log_rows_ins INTEGER := COALESCE(table_result:rows_inserted::INTEGER, 0);
+        LET v_log_status VARCHAR := table_result:status::VARCHAR;
+        LET v_log_error VARCHAR := table_result:error::VARCHAR;
+        LET v_log_duration INTEGER := TIMESTAMPDIFF('SECOND', view_start_time, view_end_time);
+        LET v_log_hash VARCHAR := SHA2(table_result::VARCHAR, 256);
+        
+        INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG (
+            RUN_ID, SOURCE_TABLE, TARGET_TABLE, ROWS_UPDATED, ROWS_INSERTED,
+            STATUS, ERROR_MESSAGE, DURATION_SECONDS, LOAD_STRATEGY, "_ROW_HASH"
+        )
+        VALUES (
+            :v_run_id,
+            'SNOWFLAKE.' || :v_source_schema || '.' || :v_source_view,
+            'TEMPORAL_ARCHIVE.' || :v_source_schema || '.' || :v_source_view || '_ARCHIVE',
+            :v_log_rows_upd,
+            :v_log_rows_ins,
+            :v_log_status,
+            :v_log_error,
+            :v_log_duration,
+            :v_view_strategy,
+            :v_log_hash
+        );
+        
         -- Fetch next
         v_source_schema := NULL;
         FETCH cur INTO v_source_schema, v_source_view;
@@ -748,26 +873,29 @@ BEGIN
     
     end_time := CURRENT_TIMESTAMP()::TIMESTAMP_NTZ;
     
-    -- Log the run
+    -- Log summary row
     LET v_duration INTEGER := TIMESTAMPDIFF('SECOND', start_time, end_time);
     LET v_status VARCHAR := CASE WHEN error_count = 0 THEN 'SUCCESS' ELSE 'PARTIAL_FAILURE' END;
     LET v_hash VARCHAR := SHA2('DYNAMIC' || views_processed || total_updated || total_inserted, 256);
     
     INSERT INTO TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG (
-        SOURCE_TABLE, TARGET_TABLE, ROWS_UPDATED, ROWS_INSERTED, 
-        STATUS, DURATION_SECONDS, "_ROW_HASH"
+        RUN_ID, SOURCE_TABLE, TARGET_TABLE, ROWS_UPDATED, ROWS_INSERTED, 
+        STATUS, DURATION_SECONDS, LOAD_STRATEGY, "_ROW_HASH"
     )
     VALUES (
+        :v_run_id,
         'ALL_VIEWS',
         'ALL_ARCHIVES',
         :total_updated,
         :total_inserted,
         :v_status,
         :v_duration,
+        'SUMMARY',
         :v_hash
     );
     
     RETURN OBJECT_CONSTRUCT(
+        'run_id', v_run_id,
         'start_time', start_time::VARCHAR,
         'end_time', end_time::VARCHAR,
         'duration_seconds', TIMESTAMPDIFF('SECOND', start_time, end_time),
@@ -814,20 +942,45 @@ SHOW TASKS IN SCHEMA TEMPORAL_ARCHIVE.ARCHIVE;
 -- Show strategy distribution
 SELECT 
     LOAD_STRATEGY,
+    IS_ACTIVE,
     COUNT(*) AS VIEW_COUNT
 FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY
-WHERE IS_ACTIVE = TRUE
-GROUP BY LOAD_STRATEGY
-ORDER BY LOAD_STRATEGY;
+GROUP BY LOAD_STRATEGY, IS_ACTIVE
+ORDER BY IS_ACTIVE DESC, LOAD_STRATEGY;
 
 -- Show views per schema
 SELECT 
     SOURCE_SCHEMA,
+    IS_ACTIVE,
     COUNT(*) AS VIEW_COUNT
 FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY
-WHERE IS_ACTIVE = TRUE
-GROUP BY SOURCE_SCHEMA
-ORDER BY SOURCE_SCHEMA;
+GROUP BY SOURCE_SCHEMA, IS_ACTIVE
+ORDER BY IS_ACTIVE DESC, SOURCE_SCHEMA;
 
-SELECT 'SCD load setup complete. ' || COUNT(*) || ' views registered for archiving.' AS STATUS
-FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY WHERE IS_ACTIVE = TRUE;
+SELECT 'SCD load setup complete. ' || 
+    (SELECT COUNT(*) FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY) || ' total views (' ||
+    (SELECT COUNT(*) FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY WHERE IS_ACTIVE = TRUE) || ' active, ' ||
+    (SELECT COUNT(*) FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY WHERE IS_ACTIVE = FALSE) || ' deactivated).' AS STATUS;
+
+-- =============================================================================
+-- CLUSTERING: Optimize query performance on largest archive tables.
+-- Cluster by (_IS_CURRENT, _LOADED_AT) to accelerate:
+--   1. Current-state queries (WHERE _IS_CURRENT = TRUE) 
+--   2. Time-range analytics (WHERE _LOADED_AT BETWEEN ...)
+-- Only applied to tables >100K rows. Auto-clustering maintains the order.
+-- =============================================================================
+
+ALTER TABLE IF EXISTS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.COLUMNS_ARCHIVE 
+    CLUSTER BY ("_IS_CURRENT", "_LOADED_AT");
+ALTER TABLE IF EXISTS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.QUERY_HISTORY_ARCHIVE 
+    CLUSTER BY ("_IS_CURRENT", "_LOADED_AT");
+ALTER TABLE IF EXISTS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.AGGREGATE_QUERY_HISTORY_ARCHIVE 
+    CLUSTER BY ("_IS_CURRENT", "_LOADED_AT");
+ALTER TABLE IF EXISTS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.ACCESS_HISTORY_ARCHIVE 
+    CLUSTER BY ("_IS_CURRENT", "_LOADED_AT");
+ALTER TABLE IF EXISTS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.AGGREGATE_ACCESS_HISTORY_ARCHIVE 
+    CLUSTER BY ("_IS_CURRENT", "_LOADED_AT");
+ALTER TABLE IF EXISTS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.TABLES_ARCHIVE 
+    CLUSTER BY ("_IS_CURRENT", "_LOADED_AT");
+ALTER TABLE IF EXISTS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.VIEWS_ARCHIVE 
+    CLUSTER BY ("_IS_CURRENT", "_LOADED_AT");

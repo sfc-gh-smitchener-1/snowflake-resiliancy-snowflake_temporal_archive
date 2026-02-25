@@ -695,7 +695,7 @@ ORDER BY changes DESC;
 
 ## Semantic View Queries
 
-These queries leverage the 9 semantic views deployed in the `TEMPORAL_ARCHIVE.SEMANTIC` schema. Use them with Cortex Analyst for natural language analytics, or run them directly.
+These queries leverage the 10 semantic views deployed in the `TEMPORAL_ARCHIVE.SEMANTIC` schema. Use them with Cortex Analyst for natural language analytics, or run them directly.
 
 ### WAREHOUSE_COST_ANALYTICS
 
@@ -1174,6 +1174,64 @@ SELECT
 FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY
 WHERE IS_ACTIVE = FALSE
 ORDER BY SOURCE_SCHEMA, SOURCE_VIEW;
--- 29 views: ORGANIZATION_USAGE (21), DATA_SHARING_USAGE (3), READER_ACCOUNT_USAGE (5)
--- Deactivated because they return 0 rows but take 3-8 min each to query
+-- 26 views: ORGANIZATION_USAGE (12 remaining), DATA_SHARING_USAGE (3), READER_ACCOUNT_USAGE (5), non-existent/secure ACCOUNT_USAGE (6)
+-- 9 ORGANIZATION_USAGE views activated (ACCOUNTS, CONTRACT_ITEMS, DATA_TRANSFER_HISTORY, etc.)
+```
+
+### ORGANIZATION_ANALYTICS
+
+> **Note**: Organization views require ORGADMIN role. These queries will return data only if your account has ORGADMIN access and org views have been activated in VIEW_REGISTRY.
+
+#### Remaining Contract Balance
+
+```sql
+-- What is our remaining contract balance?
+
+SELECT 
+    CONTRACT_NUMBER,
+    CURRENCY,
+    ROUND(SUM(FREE_USAGE_BALANCE + CAPACITY_BALANCE + ON_DEMAND_CONSUMPTION_BALANCE + ROLLOVER_BALANCE), 2) AS TOTAL_REMAINING_BALANCE,
+    DATE
+FROM TEMPORAL_ARCHIVE.ORGANIZATION_USAGE.REMAINING_BALANCE_DAILY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND DATE >= DATEADD('day', -30, CURRENT_DATE())
+GROUP BY CONTRACT_NUMBER, CURRENCY, DATE
+ORDER BY DATE DESC
+LIMIT 30;
+```
+
+#### Org-Wide Warehouse Credit Consumption by Account
+
+```sql
+-- Show org-wide warehouse credit consumption by account
+
+SELECT 
+    ACCOUNT_NAME,
+    WAREHOUSE_NAME,
+    ROUND(SUM(CREDITS_USED), 2) AS total_credits,
+    ROUND(SUM(CREDITS_USED_COMPUTE), 2) AS compute_credits,
+    ROUND(SUM(CREDITS_USED_CLOUD_SERVICES), 2) AS cloud_credits
+FROM TEMPORAL_ARCHIVE.ORGANIZATION_USAGE.WAREHOUSE_METERING_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND START_TIME >= DATEADD('day', -30, CURRENT_DATE())
+GROUP BY ACCOUNT_NAME, WAREHOUSE_NAME
+ORDER BY total_credits DESC
+LIMIT 25;
+```
+
+#### Org-Wide Storage by Account
+
+```sql
+-- What is storage usage across all accounts in the organization?
+
+SELECT 
+    ACCOUNT_NAME,
+    ROUND(AVG(STORAGE_BYTES) / POWER(1024, 4), 2) AS avg_storage_tb,
+    ROUND(AVG(STAGE_BYTES) / POWER(1024, 4), 2) AS avg_stage_tb,
+    ROUND(AVG(FAILSAFE_BYTES) / POWER(1024, 4), 2) AS avg_failsafe_tb
+FROM TEMPORAL_ARCHIVE.ORGANIZATION_USAGE.STORAGE_DAILY_HISTORY_ARCHIVE
+WHERE "_IS_CURRENT" = TRUE
+  AND USAGE_DATE >= DATEADD('day', -30, CURRENT_DATE())
+GROUP BY ACCOUNT_NAME
+ORDER BY avg_storage_tb DESC;
 ```

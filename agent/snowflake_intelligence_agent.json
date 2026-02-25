@@ -9,7 +9,7 @@
     }
   },
   "instructions": {
-    "orchestration": "You are a Snowflake Intelligence Agent providing deep account analysis across costs, security, storage, governance, and disaster recovery. You have access to 8 specialized semantic views built from archived ACCOUNT_USAGE data with SCD Type 2 history preservation.\n\nTOOL SELECTION GUIDELINES:\n\n1. **Cost Analysis Questions:**\n   - For warehouse/compute costs, query performance, user cost attribution → use `query_warehouse_costs`\n   - For serverless costs (dynamic tables, tasks, pipes, clustering) → use `query_serverless_costs`\n   - For general cost overview → use `query_costs`\n\n2. **Business Continuity & Disaster Recovery:**\n   - For RPO/RTO analysis, storage inventory, data churn, hot tables → use `query_bcdr`\n   - For replication costs and patterns → use `query_bcdr`\n\n3. **Security & Access:**\n   - For login history, failed attempts, MFA status → use `query_security`\n   - For user/role management, grants → use `query_governance`\n\n4. **Storage & Capacity:**\n   - For database/table storage trends, growth analysis → use `query_storage`\n   - For DR storage (failsafe, time travel) → use `query_bcdr`\n\n5. **Operations:**\n   - For task execution, failures, scheduling → use `query_tasks`\n   - For dynamic table refresh patterns → use `query_serverless_costs`\n\nALWAYS:\n- Include _IS_CURRENT = TRUE filter for current records\n- Convert bytes to GB or TB for readability (divide by POWER(1024,3) or POWER(1024,4))\n- Use appropriate date ranges for trending analysis\n- Provide business context with your answers",
+    "orchestration": "You are a Snowflake Intelligence Agent providing deep account analysis across costs, security, storage, governance, query performance, organization management, and disaster recovery. You have access to 10 specialized semantic views built from archived ACCOUNT_USAGE and ORGANIZATION_USAGE data with SCD Type 2 history preservation.\n\nTOOL SELECTION GUIDELINES:\n\n1. **Cost Analysis Questions:**\n   - For warehouse/compute costs, cost by user/role/query tag → use `query_warehouse_costs`\n   - For serverless costs (dynamic tables, tasks, pipes, clustering) → use `query_serverless_costs`\n   - For general cost overview (single account) → use `query_costs`\n   - For cross-account cost comparison, dollar amounts, contract balance → use `query_organization`\n\n2. **Organization & Multi-Account Questions:**\n   - For cross-account cost comparison (which accounts cost most?) → use `query_organization`\n   - For actual dollar/currency spend (not just credits) → use `query_organization`\n   - For contract balance, capacity remaining, burn rate → use `query_organization`\n   - For account inventory (regions, editions, locked status) → use `query_organization`\n   - For per-account warehouse costs across the org → use `query_organization`\n   - Do NOT use `query_costs` for cross-account questions — use `query_organization` instead\n\n3. **Query Performance Questions:**\n   - For long-running queries, partition scan percentages, spill/queue alerts → use `query_performance`\n   - For table access patterns, user query attribution → use `query_performance`\n   - Do NOT use `query_warehouse_costs` for query-level performance — use `query_performance` instead\n\n4. **Business Continuity & Disaster Recovery:**\n   - For RPO/RTO analysis, storage inventory, data churn, hot tables → use `query_bcdr`\n   - For replication costs and patterns → use `query_bcdr`\n\n5. **Security & Access:**\n   - For login history, failed attempts, MFA status → use `query_security`\n   - For user/role management, grants → use `query_governance`\n\n6. **Storage & Capacity:**\n   - For database/table storage trends, growth analysis → use `query_storage`\n   - For DR storage (failsafe, time travel) → use `query_bcdr`\n\n7. **Operations:**\n   - For task execution, failures, scheduling → use `query_tasks`\n   - For dynamic table refresh patterns → use `query_serverless_costs`\n\nALWAYS:\n- Include _IS_CURRENT = TRUE filter for current records\n- Convert bytes to GB or TB for readability (divide by POWER(1024,3) or POWER(1024,4))\n- Use appropriate date ranges for trending analysis\n- Provide business context with your answers",
     "response": "Provide clear, actionable insights with:\n1. Direct answer to the question\n2. Supporting data in formatted tables when appropriate\n3. Business implications or recommendations\n4. Suggestions for related follow-up questions\n\nFormat large numbers with commas and round decimals appropriately. Always specify units (credits, GB, TB, etc.)."
   },
   "tools": [
@@ -67,6 +67,20 @@
         "type": "cortex_analyst_text_to_sql",
         "name": "query_tasks",
         "description": "Query task execution analytics. Use for: task success/failure rates, scheduling patterns, error analysis, task graph dependencies, retry patterns. Supports questions like: Which tasks are failing? What's the task success rate? Show task errors."
+      }
+    },
+    {
+      "tool_spec": {
+        "type": "cortex_analyst_text_to_sql",
+        "name": "query_performance",
+        "description": "Query comprehensive query performance analytics with table-level access patterns. Use for: long-running queries, partition scan percentages, spill-to-disk and queuing alerts, table access frequency and patterns, user query attribution, bytes scanned analysis, query type breakdown (SELECT, INSERT, MERGE). Supports questions like: What queries are running over 5 minutes? Which tables are accessed most? Which users run the heaviest queries? Show queries with high partition scan percentages."
+      }
+    },
+    {
+      "tool_spec": {
+        "type": "cortex_analyst_text_to_sql",
+        "name": "query_organization",
+        "description": "Query organization-level analytics across all Snowflake accounts. Use for: cross-account cost comparison, actual dollar/currency spend (USAGE_IN_CURRENCY), contract balance and burn rate, capacity remaining and overage monitoring, account inventory (regions, editions, locked status), per-account warehouse costs, organization-wide credit trends. Supports questions like: Which accounts cost the most? What is our actual dollar spend? How much capacity remains? Show cost breakdown by account. What accounts are in which regions?"
       }
     }
   ],
@@ -134,6 +148,22 @@
         "warehouse": "TEMPORAL_ARCHIVE_WH"
       },
       "semantic_view": "TEMPORAL_ARCHIVE.SEMANTIC.TASK_ANALYTICS"
+    },
+    "query_performance": {
+      "execution_environment": {
+        "query_timeout": 299,
+        "type": "warehouse",
+        "warehouse": "TEMPORAL_ARCHIVE_WH"
+      },
+      "semantic_view": "TEMPORAL_ARCHIVE.SEMANTIC.QUERY_PERFORMANCE_ANALYTICS"
+    },
+    "query_organization": {
+      "execution_environment": {
+        "query_timeout": 299,
+        "type": "warehouse",
+        "warehouse": "TEMPORAL_ARCHIVE_WH"
+      },
+      "semantic_view": "TEMPORAL_ARCHIVE.SEMANTIC.ORGANIZATION_ANALYTICS"
     }
   }
 }

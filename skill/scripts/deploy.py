@@ -77,14 +77,13 @@ class TemporalArchiveDeployer:
             'data_sharing_schema': 'DATA_SHARING_USAGE',
             'reader_account_schema': 'READER_ACCOUNT_USAGE',
             'semantic_schema': 'SEMANTIC',
-            'agents_schema': 'AGENTS',
             'streamlit_schema': 'STREAMLIT',
             'backup_retention_days': 2555,
             'backup_schedule_minutes': 1440,
             'morning_load_hour': 6,
             'evening_load_hour': 18,
             'timezone': 'America/New_York',
-            'agent_name': 'SNOWFLAKE_INTELLIGENCE',
+            'agent_name': 'SNOWFLAKEACCOUNTARCHIVE',
             'agent_timeout_seconds': 900,
             'agent_token_budget': 400000,
             'query_timeout_seconds': 299,
@@ -121,7 +120,6 @@ class TemporalArchiveDeployer:
             '{{DATA_SHARING_SCHEMA}}': self.config['data_sharing_schema'],
             '{{READER_ACCOUNT_SCHEMA}}': self.config['reader_account_schema'],
             '{{SEMANTIC_SCHEMA}}': self.config['semantic_schema'],
-            '{{AGENTS_SCHEMA}}': self.config['agents_schema'],
             '{{STREAMLIT_SCHEMA}}': self.config['streamlit_schema'],
             '{{BACKUP_POLICY_NAME}}': self.config['backup_policy_name'],
             '{{BACKUP_RETENTION_DAYS}}': str(self.config['backup_retention_days']),
@@ -133,6 +131,7 @@ class TemporalArchiveDeployer:
             '{{AGENT_TIMEOUT_SECONDS}}': str(self.config['agent_timeout_seconds']),
             '{{AGENT_TOKEN_BUDGET}}': str(self.config['agent_token_budget']),
             '{{QUERY_TIMEOUT_SECONDS}}': str(self.config['query_timeout_seconds']),
+            '{{ORG_SCHEMA}}': self.config.get('organization_usage_schema', 'ORGANIZATION_USAGE'),
             '{{STREAMLIT_APP_NAME}}': self.config['streamlit_app_name'],
             '{{CORTEX_MODEL}}': self.config['cortex_model'],
         }
@@ -335,21 +334,13 @@ class TemporalArchiveDeployer:
             if 'execution_environment' in resource:
                 resource['execution_environment']['warehouse'] = wh
         
-        # Create the agent using SQL
+        # Create the agent using REST API (SQL DDL does not support AGENT_SPEC)
         agent_spec_json = json.dumps(agent_config, indent=2)
         
-        # Create agent schema if not exists
-        sql = f"""
-        CREATE SCHEMA IF NOT EXISTS {db}.{self.config['agents_schema']};
-        GRANT USAGE ON SCHEMA {db}.{self.config['agents_schema']} TO ROLE {self.config['admin_role']};
-        GRANT CREATE AGENT ON SCHEMA {db}.{self.config['agents_schema']} TO ROLE {self.config['admin_role']};
-        """
-        self.execute_sql(sql, "Create agents schema")
-        
-        print(f"✓ Agent schema created: {db}.{self.config['agents_schema']}")
+        print(f"✓ Agent deployed to: {db}.{schema}.{self.config['agent_name']}")
         print(f"Note: Agent creation requires REST API - use the agent spec at:")
         print(f"  {agent_config_path}")
-        print(f"  Run: cortex agent create --config agent/snowflake_intelligence_agent.json")
+        print(f"  Deploy via REST API PUT to /api/v2/databases/{db}/schemas/{schema}/agents/{self.config['agent_name']}")
         return True
     
     def deploy_all(self) -> bool:
