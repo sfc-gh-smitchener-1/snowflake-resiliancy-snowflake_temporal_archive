@@ -136,7 +136,7 @@ SHOW TASKS IN SCHEMA TEMPORAL_ARCHIVE.ARCHIVE;
 
 | Component | Count | Schema |
 |-----------|-------|--------|
-| SCD Archive Tables | 107 active | ACCOUNT_USAGE + ORGANIZATION_USAGE (26 reader/data-sharing/non-existent/secure deactivated) |
+| SCD Archive Tables | 181 active | ACCOUNT_USAGE + ORGANIZATION_USAGE (31 reader/data-sharing/non-existent deactivated) |
 | Semantic Views | 10 | SEMANTIC |
 | Cortex Agent | 1 | SEMANTIC |
 | Scheduled Tasks | 2 | ARCHIVE |

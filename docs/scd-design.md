@@ -245,11 +245,11 @@ SELECT * FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY;
 | ORGANIZATION_USAGE | WAREHOUSE_METERING_HISTORY | FALSE | APPEND_ONLY | START_TIME | NULL |
 | ... | ... | ... | ... | ... | ... |
 
-**View Counts**: 133 total (107 active, 26 deactivated)
+**View Counts**: 212 total (181 active, 31 deactivated)
 - **57 APPEND_ONLY**: Time-series views with watermark-based delta loading
 - **40 SOFT_DELETE_MUTABLE**: Mutable views with full SCD2 via temp table
 - **10 FULL_COMPARE**: Fallback hash comparison for views without clear keys
-- **26 deactivated**: DATA_SHARING_USAGE (3), READER_ACCOUNT_USAGE (5), ORGANIZATION_USAGE (12 remaining inactive), non-existent/secure ACCOUNT_USAGE (6)
+- **31 deactivated**: DATA_SHARING_USAGE (3), READER_ACCOUNT_USAGE (5), ORGANIZATION_USAGE (16 remaining inactive), non-existent ACCOUNT_USAGE (7)
 
 To disable a view:
 

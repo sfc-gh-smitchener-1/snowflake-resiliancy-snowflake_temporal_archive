@@ -7,7 +7,7 @@
 
 | Feature | Description |
 |---------|-------------|
-| **Extended Retention** | Archive 133 ACCOUNT_USAGE & ORGANIZATION_USAGE views (107 active) with 7+ year history (vs 1 year native) |
+| **Extended Retention** | Archive 212 ACCOUNT_USAGE & ORGANIZATION_USAGE views (181 active) with 7+ year history (vs 1 year native) |
 | **SCD Type 2 History** | Track every change with full audit trail and point-in-time queries |
 | **WORM Compliance** | Immutable backups with RETENTION LOCK for SEC 17a-4, HIPAA, FINRA |
 | **AI-Ready Analytics** | 10 semantic views + Cortex Intelligence Agent for natural language queries |
@@ -48,21 +48,21 @@ CALL TEMPORAL_ARCHIVE.ARCHIVE.RUN_SCD_LOAD();
 ## Architecture
 
 ```
-SNOWFLAKE.ACCOUNT_USAGE (98 active views)
-SNOWFLAKE.ORGANIZATION_USAGE (9 active views)
+SNOWFLAKE.ACCOUNT_USAGE (176 active views)
+SNOWFLAKE.ORGANIZATION_USAGE (5 active views)
          │
          │ 3-Strategy Delta Load (6 AM & 6 PM daily)
-         │  ├── APPEND_ONLY: Watermark-based delta (57 views)
-         │  ├── SOFT_DELETE_MUTABLE: Full SCD2 w/ temp table (40 views)
-         │  └── FULL_COMPARE: Hash comparison fallback (10 views)
+         │  ├── APPEND_ONLY: Watermark-based delta (97 active views)
+         │  ├── SOFT_DELETE_MUTABLE: Full SCD2 w/ temp table (61 active views)
+         │  └── FULL_COMPARE: Hash comparison fallback (23 active views)
          ▼
 ┌─────────────────────────────────────────────────────────┐
 │  TEMPORAL_ARCHIVE Database                              │
-│  ├── ACCOUNT_USAGE Schema (98 SCD Type 2 archive tables)│
-│  ├── ORGANIZATION_USAGE Schema (9 active archive tables)│
+│  ├── ACCOUNT_USAGE Schema (176 SCD Type 2 archive tbl) │
+│  ├── ORGANIZATION_USAGE Schema (5 active archive tables)│
 │  ├── SEMANTIC Schema (10 semantic views + Cortex Agent) │
 │  └── ARCHIVE Schema (procedures, tasks, registry, log)  │
-│       ├── VIEW_REGISTRY (133 views, 107 active)          │
+│       ├── VIEW_REGISTRY (212 views, 181 active)         │
 │       ├── WATERMARK_STATE (delta load tracking)         │
 │       └── LOAD_LOG (per-view detail + summary rows)     │
 │                                                         │
@@ -76,7 +76,7 @@ SNOWFLAKE.ORGANIZATION_USAGE (9 active views)
 
 | Component | Count | Description |
 |-----------|-------|-------------|
-| Archive Tables | 107 active | SCD Type 2 tables (26 deactivated reader/data-sharing/secure views) |
+| Archive Tables | 181 active | SCD Type 2 tables (31 deactivated reader/data-sharing/org-cost/secure views) |
 | Semantic Views | 10 | Cost, security, storage, governance, tasks, BC/DR, query performance, organization analytics |
 | Cortex Agent | 1 | SNOWFLAKEACCOUNTARCHIVE with 10 tools for natural language queries |
 | Scheduled Tasks | 2 | Morning (6 AM) and evening (6 PM) SCD loads |
@@ -168,13 +168,25 @@ SNOWFLAKE.ORGANIZATION_USAGE (9 active views)
 | Metric | Baseline | Optimized | Improvement |
 |--------|----------|-----------|-------------|
 | Runtime | 2302s (38 min) | 968s (16.1 min) | **58% faster** |
-| Views Processed | 133 (all) | 107 (active) | 26 deactivated |
-| Strategy | Full compare only | 3-strategy delta | Watermark + temp table |
+| Views Processed | 212 (all) | 181 (active) | 31 deactivated |
+| Strategy | Full compare only | 3-strategy delta | 97 watermark + 61 temp table + 23 hash |
 | Table Layout | SCD columns last | SCD columns first | No column list overhead |
 | Warehouse | LARGE Standard Gen2 | LARGE Standard Gen2 | Auto-suspend 60s |
 | Clustering | None | 7 largest tables | `(_IS_CURRENT, _LOADED_AT)` |
 | Schema Evolution | Manual | Automatic | Auto-detect new columns |
 | Logging | Summary only | Per-view detail | RUN_ID grouping |
+
+## Recent Updates (September 2026)
+
+**Registry modernization** — Added 71 new ACCOUNT_USAGE views that Snowflake introduced since this repo was first built (Cortex Agent/AI/Guardrails usage, Semantic View metadata, Data Movement policies, Storage Lifecycle policies, Trust Center findings, Postgres/Iceberg/Openflow usage, dbt project execution, and more). Registry now covers all 181 current ACCOUNT_USAGE views. Deprecated views (SNAPSHOTS/SNAPSHOT_SETS/SNAPSHOT_STORAGE_USAGE, CORTEX_FUNCTIONS_QUERY_USAGE_HISTORY) are intentionally excluded in favor of their renamed replacements.
+
+**Semantic view correctness** — Fixed a critical bug where every semantic view instructed Cortex Analyst to filter on `_IS_CURRENT = TRUE` but never exposed that column as a queryable dimension, causing all aggregates to double-count SCD history versions. Every table across all 10 semantic views now exposes an `is_current` dimension. Also fixed nonexistent column references (`DYNAMIC_TABLE_REFRESH_HISTORY.ID`), nullable primary keys (`TASK_ANALYTICS`), and incorrect composite keys.
+
+**Organization analytics activation** — The 5 ORGANIZATION_USAGE views required by `ORGANIZATION_ANALYTICS` are now active by default (previously all 21 org views were deactivated, which caused the semantic view creation to fail on fresh deploys). They return 0 rows safely on non-ORGADMIN accounts.
+
+**Skill template sync** — Regenerated `skill/templates/02_scd_load.sql` from the current reference implementation (was a stale copy of an old single-strategy version missing watermarks, 3-strategy delta load, and all new views). Fixed `deploy.py` to execute `CREATE OR REPLACE AGENT` via SQL DDL instead of printing a stale "use REST API" message.
+
+**Bug fixes** — `EXTERNAL_ACCESS_HISTORY` watermark (was using `QUERY_ID`, not a timestamp), `CALLER_GRANTS_TO_ROLES` (nonexistent view registered as active), duplicate `LOAD_LOG` DDL across three scripts consolidated to one, wrong column names in `queries.md` sample queries, warehouse size defaults corrected to LARGE Gen2 throughout, `GENERATION = '2'` added to skill template.
 
 ## References
 
@@ -182,3 +194,4 @@ SNOWFLAKE.ORGANIZATION_USAGE (9 active views)
 - [Backup Policy](https://docs.snowflake.com/en/sql-reference/sql/create-backup-policy)
 - [Semantic Views](https://docs.snowflake.com/en/sql-reference/sql/create-semantic-view)
 - [Cortex Agents](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents)
+- [ACCOUNT_USAGE Views](https://docs.snowflake.com/en/sql-reference/account-usage)

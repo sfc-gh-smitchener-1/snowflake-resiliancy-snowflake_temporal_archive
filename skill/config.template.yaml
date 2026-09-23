@@ -8,7 +8,7 @@
 # =============================================================================
 database_name: TEMPORAL_ARCHIVE
 warehouse_name: TEMPORAL_ARCHIVE_WH
-warehouse_size: XSMALL                    # XSMALL, SMALL, MEDIUM, LARGE, XLARGE, etc.
+warehouse_size: LARGE                     # XSMALL, SMALL, MEDIUM, LARGE, XLARGE, etc. (LARGE Gen2 recommended for production)
 warehouse_auto_suspend_seconds: 60        # Auto-suspend after inactivity
 warehouse_min_clusters: 1
 warehouse_max_clusters: 1
@@ -78,10 +78,12 @@ connection: default
 # Which ACCOUNT_USAGE view categories to archive
 # Set to false to skip certain categories
 archive_sources:
-  account_usage: true                     # 58 views from SNOWFLAKE.ACCOUNT_USAGE
-  organization_usage: true                # 14 views from SNOWFLAKE.ORGANIZATION_USAGE
-  data_sharing_usage: true                # 3 views from SNOWFLAKE.DATA_SHARING_USAGE
-  reader_account_usage: true              # 4 views from SNOWFLAKE.READER_ACCOUNT_USAGE
+  account_usage: true                     # 183 views from SNOWFLAKE.ACCOUNT_USAGE (176 active)
+  organization_usage: true                # 21 views from SNOWFLAKE.ORGANIZATION_USAGE (5 active by default; needed by SEMANTIC.ORGANIZATION_ANALYTICS)
+  data_sharing_usage: true                # 3 views from SNOWFLAKE.DATA_SHARING_USAGE (0 active by default)
+  reader_account_usage: true              # 5 views from SNOWFLAKE.READER_ACCOUNT_USAGE (0 active by default)
+# Note: these toggles are informational only today - IS_ACTIVE per view is controlled
+# directly in TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY (see sql/02_scd_load.sql), not by this file.
 
 # =============================================================================
 # OPTIONAL FEATURES

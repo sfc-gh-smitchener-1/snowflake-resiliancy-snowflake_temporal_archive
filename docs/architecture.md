@@ -9,8 +9,8 @@ Detailed technical architecture of the Snowflake Temporal Archive solution.
 │                              DATA FLOW ARCHITECTURE                             │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
-    SNOWFLAKE.ACCOUNT_USAGE (98 active views)
-    SNOWFLAKE.ORGANIZATION_USAGE (9 active views)
+    SNOWFLAKE.ACCOUNT_USAGE (176 active views)
+    SNOWFLAKE.ORGANIZATION_USAGE (5 active views)
     SNOWFLAKE.DATA_SHARING_USAGE (3 views - deactivated)
     SNOWFLAKE.READER_ACCOUNT_USAGE (5 views - deactivated)
                     │
@@ -22,7 +22,7 @@ Detailed technical architecture of the Snowflake Temporal Archive solution.
     │                                                                   │
     │  ┌────────────────────────────────────────────────────────────┐   │
     │  │ ARCHIVE Schema                                             │   │
-    │  │ • VIEW_REGISTRY (133 views: 107 active, 26 deactivated)    │   │
+    │  │ • VIEW_REGISTRY (212 views: 181 active, 31 deactivated)    │   │
     │  │ • WATERMARK_STATE (delta load tracking per view)           │   │
     │  │ • LOAD_LOG (per-view detail rows + summary, RUN_ID)       │   │
     │  │ • RUN_SCD_LOAD() procedure                                 │   │
@@ -38,7 +38,7 @@ Detailed technical architecture of the Snowflake Temporal Archive solution.
     │  │ • USERS_ARCHIVE                                            │   │
     │  │ • LOGIN_HISTORY_ARCHIVE                                    │   │
     │  │ • WAREHOUSE_METERING_HISTORY_ARCHIVE                       │   │
-    │  │ • ... (98 active archive tables)                           │   │
+    │  │ • ... (176 active archive tables)                           │   │
     │  └────────────────────────────────────────────────────────────┘   │
     │                           │                                       │
     │                           ▼                                       │
@@ -279,7 +279,7 @@ A summary row with `LOAD_STRATEGY = 'SUMMARY'` captures overall statistics. This
 
 | Use Case | Recommended Size |
 |----------|-----------------|
-| Production loads (107 active views) | LARGE Standard Gen2 |
+| Production loads (181 active views) | LARGE Standard Gen2 |
 | Initial load (large account) | LARGE Standard Gen2 |
 | Complex analytical queries | Medium+ |
 
@@ -290,7 +290,7 @@ A summary row with `LOAD_STRATEGY = 'SUMMARY'` captures overall statistics. This
 ### Storage Estimation
 
 Archive storage grows based on:
-- Number of active source views (107 active baseline)
+- Number of active source views (181 active baseline)
 - Data change frequency
 - Historical record accumulation
 

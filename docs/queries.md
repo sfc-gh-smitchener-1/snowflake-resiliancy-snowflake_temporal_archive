@@ -1074,8 +1074,9 @@ Queries for monitoring the Temporal Archive pipeline itself — load status, wat
 -- Recent load history with status breakdown
 
 SELECT 
-    SOURCE_SCHEMA,
-    SOURCE_VIEW,
+    SOURCE_TABLE,
+    TARGET_TABLE,
+    LOAD_STRATEGY,
     STATUS,
     ROWS_INSERTED,
     ROWS_UPDATED,
@@ -1114,8 +1115,8 @@ LIMIT 20;
 SELECT 
     ws.SOURCE_SCHEMA,
     ws.SOURCE_VIEW,
-    ws.LAST_WATERMARK,
-    ws.UPDATED_AT,
+    ws.LAST_WATERMARK_VALUE,
+    ws.LAST_LOADED_AT,
     vr.LOAD_STRATEGY,
     vr.WATERMARK_COLUMN,
     vr.IS_ACTIVE
@@ -1123,7 +1124,7 @@ FROM TEMPORAL_ARCHIVE.ARCHIVE.WATERMARK_STATE ws
 JOIN TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY vr
     ON ws.SOURCE_SCHEMA = vr.SOURCE_SCHEMA 
     AND ws.SOURCE_VIEW = vr.SOURCE_VIEW
-ORDER BY ws.UPDATED_AT DESC;
+ORDER BY ws.LAST_LOADED_AT DESC;
 ```
 
 ### View Registry Health
@@ -1148,14 +1149,16 @@ ORDER BY IS_ACTIVE DESC, LOAD_STRATEGY;
 -- Investigate recent load failures with error details
 
 SELECT 
-    SOURCE_SCHEMA,
-    SOURCE_VIEW,
+    SOURCE_TABLE,
+    TARGET_TABLE,
+    LOAD_STRATEGY,
     STATUS,
     ERROR_MESSAGE,
     LOAD_TIMESTAMP,
     DURATION_SECONDS
 FROM TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG
-WHERE STATUS != 'SUCCESS'
+WHERE LOAD_STRATEGY != 'SUMMARY'
+  AND UPPER(STATUS) != 'SUCCESS'
   AND LOAD_TIMESTAMP >= DATEADD('day', -7, CURRENT_TIMESTAMP())
 ORDER BY LOAD_TIMESTAMP DESC;
 ```
@@ -1174,13 +1177,14 @@ SELECT
 FROM TEMPORAL_ARCHIVE.ARCHIVE.VIEW_REGISTRY
 WHERE IS_ACTIVE = FALSE
 ORDER BY SOURCE_SCHEMA, SOURCE_VIEW;
--- 26 views: ORGANIZATION_USAGE (12 remaining), DATA_SHARING_USAGE (3), READER_ACCOUNT_USAGE (5), non-existent/secure ACCOUNT_USAGE (6)
--- 9 ORGANIZATION_USAGE views activated (ACCOUNTS, CONTRACT_ITEMS, DATA_TRANSFER_HISTORY, etc.)
+-- 31 views: ORGANIZATION_USAGE (16 remaining inactive), DATA_SHARING_USAGE (3), READER_ACCOUNT_USAGE (5), non-existent ACCOUNT_USAGE (7)
+-- 5 ORGANIZATION_USAGE views are active by default (WAREHOUSE_METERING_HISTORY, METERING_DAILY_HISTORY,
+-- REMAINING_BALANCE_DAILY, USAGE_IN_CURRENCY_DAILY, ACCOUNTS) because SEMANTIC.ORGANIZATION_ANALYTICS depends on them
 ```
 
 ### ORGANIZATION_ANALYTICS
 
-> **Note**: Organization views require ORGADMIN role. These queries will return data only if your account has ORGADMIN access and org views have been activated in VIEW_REGISTRY.
+> **Note**: Organization views require ORGADMIN role. The 5 views these queries depend on are active by default, but will return 0 rows (not an error) unless your account has ORGADMIN access.
 
 #### Remaining Contract Balance
 

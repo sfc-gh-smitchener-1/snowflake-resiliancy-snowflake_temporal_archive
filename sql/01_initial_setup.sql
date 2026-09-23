@@ -132,28 +132,10 @@ GRANT ROLE TEMPORAL_ARCHIVE_WRITER TO ROLE TEMPORAL_ARCHIVE_ADMIN;
 
 
 -- =============================================================================
--- CREATE LOGGING TABLE
+-- NOTE: LOAD_LOG is created by 02_scd_load.sql (run as DATA_ADMIN), not here.
+-- Keeping it in a single place avoids three slightly different schemas for the
+-- same table across 01/02/04.
 -- =============================================================================
-
-CREATE TABLE IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE.LOAD_LOG (
-    LOG_ID              NUMBER AUTOINCREMENT,
-    LOAD_TIMESTAMP      TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
-    SOURCE_TABLE        VARCHAR(256),
-    TARGET_TABLE        VARCHAR(256),
-    ROWS_UPDATED        NUMBER,
-    ROWS_INSERTED       NUMBER,
-    STATUS              VARCHAR(50),
-    ERROR_MESSAGE       VARCHAR(16777216),
-    DURATION_SECONDS    NUMBER(10,2),
-    "_LOADED_AT"        TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
-    "_SOURCE_SYSTEM"    VARCHAR(100) DEFAULT 'TEMPORAL_ARCHIVE',
-    "_SOURCE_TABLE"     VARCHAR(100) DEFAULT 'LOAD_LOG',
-    "_ROW_HASH"         VARCHAR(64),
-    "_IS_CURRENT"       BOOLEAN DEFAULT TRUE,
-    "_VALID_FROM"       TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
-    "_VALID_TO"         VARCHAR(50) DEFAULT '9999-12-31 23:59:59'
-)
-COMMENT = 'Audit log of all SCD load operations. Ref: https://docs.snowflake.com/en/user-guide/backups';
 
 
 -- =============================================================================
@@ -202,4 +184,4 @@ ALTER DATABASE TEMPORAL_ARCHIVE
 -- VERIFICATION
 -- =============================================================================
 
-SELECT 'TEMPORAL_ARCHIVE setup complete. Next: Run 02_scd_load_procedure.sql as DATA_ADMIN' AS STATUS;
+SELECT 'TEMPORAL_ARCHIVE setup complete. Next: Run 02_scd_load.sql as DATA_ADMIN' AS STATUS;

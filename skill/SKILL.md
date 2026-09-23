@@ -9,14 +9,14 @@ Deploy a complete temporal data archive solution that preserves your Snowflake A
 
 ## What This Skill Creates
 
-1. **SCD Type 2 Archive Tables** - Preserve every change to 133 registered ACCOUNT_USAGE & ORGANIZATION_USAGE views (107 active) with full audit trail
+1. **SCD Type 2 Archive Tables** - Preserve every change to 212 registered ACCOUNT_USAGE & ORGANIZATION_USAGE views (181 active) with full audit trail
 2. **WORM Backup Policy** - SEC 17a-4 / HIPAA / FINRA compliant immutable backups (7-year retention)
 3. **Automated Data Loads** - Twice daily scheduled tasks (configurable)
 4. **10 Semantic Views** - Natural language analytics via Cortex Analyst
 5. **Cortex Intelligence Agent** - AI agent with 10 tools for deep account analysis
 6. **Streamlit Dashboard** - Interactive analytics application
 
-## Prerequisites1
+## Prerequisites
 
 Before deploying, ensure you have:
 - ACCOUNTADMIN role access (for initial setup)
@@ -43,7 +43,7 @@ Deploy Temporal Archive with database name MY_ARCHIVE and warehouse MY_WH
 |-----------|---------|-------------|
 | `database_name` | TEMPORAL_ARCHIVE | Target database name |
 | `warehouse_name` | TEMPORAL_ARCHIVE_WH | Warehouse name |
-| `warehouse_size` | XSMALL | Warehouse size (LARGE Gen2 recommended for production) |
+| `warehouse_size` | LARGE | Warehouse size, Gen2 (recommended for production; use SMALL/MEDIUM for lighter workloads) |
 | `admin_role` | DATA_ADMIN | Primary admin role |
 | `backup_retention_days` | 2555 | Backup retention (7 years default) |
 | `morning_load_hour` | 6 | Morning SCD load hour (local timezone) |
@@ -93,7 +93,7 @@ Run the SQL scripts in order, substituting parameters:
 - Creates schemas (ARCHIVE, ACCOUNT_USAGE, ORGANIZATION_USAGE, SEMANTIC, STREAMLIT)
 
 **3.2 SCD Load Infrastructure (02_scd_load.sql)**
-- Creates VIEW_REGISTRY with 133 source views (107 active, 26 deactivated)
+- Creates VIEW_REGISTRY with 212 source views (181 active, 31 deactivated)
 - Creates WATERMARK_STATE for delta load tracking
 - Creates LOAD_VIEW_ARCHIVE procedure (3-strategy SCD Type 2 logic)
 - Creates scheduled tasks for automated loads
@@ -153,7 +153,7 @@ When generating SQL, replace these placeholders:
 |-------------|---------------|
 | `{{DATABASE_NAME}}` | TEMPORAL_ARCHIVE |
 | `{{WAREHOUSE_NAME}}` | TEMPORAL_ARCHIVE_WH |
-| `{{WAREHOUSE_SIZE}}` | XSMALL |
+| `{{WAREHOUSE_SIZE}}` | LARGE |
 | `{{ADMIN_ROLE}}` | DATA_ADMIN |
 | `{{READER_ROLE}}` | TEMPORAL_ARCHIVE_READER |
 | `{{WRITER_ROLE}}` | TEMPORAL_ARCHIVE_WRITER |
@@ -246,8 +246,8 @@ GRANT USAGE ON AGENT {{DATABASE_NAME}}.SEMANTIC.SNOWFLAKEACCOUNTARCHIVE TO ROLE 
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│           SNOWFLAKE.ACCOUNT_USAGE (98 active views)                  │
-│           SNOWFLAKE.ORGANIZATION_USAGE (9 active views)              │
+│           SNOWFLAKE.ACCOUNT_USAGE (176 active views)                  │
+│           SNOWFLAKE.ORGANIZATION_USAGE (5 active views)              │
 └─────────────────────┬───────────────────────────────────────────────┘
                       │ Twice Daily 3-Strategy Delta Load
                       ▼

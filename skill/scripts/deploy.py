@@ -63,7 +63,7 @@ class TemporalArchiveDeployer:
         defaults = {
             'database_name': 'TEMPORAL_ARCHIVE',
             'warehouse_name': 'TEMPORAL_ARCHIVE_WH',
-            'warehouse_size': 'XSMALL',
+            'warehouse_size': 'LARGE',
             'warehouse_auto_suspend_seconds': 60,
             'warehouse_min_clusters': 1,
             'warehouse_max_clusters': 1,
@@ -334,13 +334,20 @@ class TemporalArchiveDeployer:
             if 'execution_environment' in resource:
                 resource['execution_environment']['warehouse'] = wh
         
-        # Create the agent using REST API (SQL DDL does not support AGENT_SPEC)
-        agent_spec_json = json.dumps(agent_config, indent=2)
-        
-        print(f"✓ Agent deployed to: {db}.{schema}.{self.config['agent_name']}")
-        print(f"Note: Agent creation requires REST API - use the agent spec at:")
-        print(f"  {agent_config_path}")
-        print(f"  Deploy via REST API PUT to /api/v2/databases/{db}/schemas/{schema}/agents/{self.config['agent_name']}")
+        # CREATE AGENT ... FROM SPECIFICATION takes a YAML body (SQL DDL has supported
+        # CREATE [OR REPLACE] AGENT since it reached GA - no REST API call needed).
+        # https://docs.snowflake.com/en/sql-reference/sql/create-agent
+        agent_spec_yaml = yaml.dump(agent_config, default_flow_style=False, sort_keys=False)
+        agent_fqn = f"{db}.{schema}.{self.config['agent_name']}"
+        create_agent_sql = (
+            f"CREATE OR REPLACE AGENT {agent_fqn}\n"
+            f"    COMMENT = 'Snowflake Temporal Archive - AI-powered account analysis agent'\n"
+            f"    FROM SPECIFICATION\n"
+            f"    $$\n{agent_spec_yaml}    $$;"
+        )
+        self.execute_sql(create_agent_sql, "Cortex Intelligence Agent")
+
+        print(f"✓ Agent deployed to: {agent_fqn}")
         return True
     
     def deploy_all(self) -> bool:

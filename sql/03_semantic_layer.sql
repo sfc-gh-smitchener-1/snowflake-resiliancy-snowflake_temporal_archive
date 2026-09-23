@@ -33,7 +33,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.SERVERLESS_COST_ANALYT
     
     TABLES (
         DYNAMIC_TABLE_REFRESH AS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.DYNAMIC_TABLE_REFRESH_HISTORY_ARCHIVE
-            PRIMARY KEY (ID, REFRESH_START_TIME)
+            PRIMARY KEY (QUALIFIED_NAME, REFRESH_START_TIME)
             WITH SYNONYMS ('dynamic tables', 'dt refresh', 'dynamic table runs'),
             
         SERVERLESS_TASK AS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.SERVERLESS_TASK_HISTORY_ARCHIVE
@@ -94,6 +94,22 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.SERVERLESS_COST_ANALYT
     )
     
     DIMENSIONS (
+        -- SCD Type 2 current-version flag (see AI_SQL_GENERATION note below)
+        DYNAMIC_TABLE_REFRESH.is_current AS DYNAMIC_TABLE_REFRESH."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this DYNAMIC_TABLE_REFRESH record',
+        SERVERLESS_TASK.is_current AS SERVERLESS_TASK."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this SERVERLESS_TASK record',
+        METERING_DAILY.is_current AS METERING_DAILY."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this METERING_DAILY record',
+        AUTO_CLUSTERING.is_current AS AUTO_CLUSTERING."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this AUTO_CLUSTERING record',
+        PIPE_USAGE.is_current AS PIPE_USAGE."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this PIPE_USAGE record',
         -- Dynamic Table Dimensions
         DYNAMIC_TABLE_REFRESH.dt_name AS DYNAMIC_TABLE_REFRESH.NAME
             WITH SYNONYMS ('dynamic table name', 'dt name')
@@ -211,7 +227,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.SERVERLESS_COST_ANALYT
             COMMENT = 'Total billed credits',
             
         -- Dynamic Table Metrics
-        DYNAMIC_TABLE_REFRESH.dt_refresh_count AS COUNT(DISTINCT DYNAMIC_TABLE_REFRESH.ID || DYNAMIC_TABLE_REFRESH.REFRESH_START_TIME)
+        DYNAMIC_TABLE_REFRESH.dt_refresh_count AS COUNT(DISTINCT DYNAMIC_TABLE_REFRESH.QUALIFIED_NAME || DYNAMIC_TABLE_REFRESH.REFRESH_START_TIME)
             WITH SYNONYMS ('refresh count', 'dt runs')
             COMMENT = 'Number of dynamic table refreshes',
         DYNAMIC_TABLE_REFRESH.dt_success_count AS SUM(CASE WHEN DYNAMIC_TABLE_REFRESH.dt_state = 'SUCCEEDED' THEN 1 ELSE 0 END)
@@ -223,7 +239,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.SERVERLESS_COST_ANALYT
     )
     
     COMMENT = 'Serverless compute cost analytics including Dynamic Tables, Tasks, Pipes, and Auto-Clustering'
-    AI_SQL_GENERATION 'Always filter with "_IS_CURRENT" = TRUE to get current records. SERVICE_TYPE values include: SERVERLESS_TASK, AUTO_CLUSTERING, PIPE, MATERIALIZED_VIEW, AI_SERVICES, SEARCH_OPTIMIZATION, SNOWPIPE_STREAMING. Dynamic table STATE values: SUCCEEDED, FAILED, UPSTREAM_FAILED. REFRESH_ACTION values: INCREMENTAL, FULL, NO_DATA. TARGET_LAG_SEC indicates how fresh the dynamic table should be (e.g., 900 = 15 minutes, 3600 = 1 hour). Use REFRESH_START_TIME or START_TIME for time-based filtering. To find which dynamic tables run frequently, look at those with low TARGET_LAG_SEC values and high refresh counts.'
+    AI_SQL_GENERATION 'Always filter with the is_current = TRUE dimension on each table to get current records and avoid double-counting SCD Type 2 history. SERVICE_TYPE values include: SERVERLESS_TASK, AUTO_CLUSTERING, PIPE, MATERIALIZED_VIEW, AI_SERVICES, SEARCH_OPTIMIZATION, SNOWPIPE_STREAMING. Dynamic table STATE values: SUCCEEDED, FAILED, UPSTREAM_FAILED. REFRESH_ACTION values: INCREMENTAL, FULL, NO_DATA. TARGET_LAG_SEC indicates how fresh the dynamic table should be (e.g., 900 = 15 minutes, 3600 = 1 hour). Use REFRESH_START_TIME or START_TIME for time-based filtering. To find which dynamic tables run frequently, look at those with low TARGET_LAG_SEC values and high refresh counts.'
     AI_QUESTION_CATEGORIZATION 'This semantic view answers questions about: Dynamic table costs and refresh patterns, Which dynamic tables are running frequently, Serverless task credit consumption, Auto-clustering costs by table, Snowpipe ingestion costs, Daily service-level cost breakdown, Comparing costs across serverless features.';
 
 
@@ -287,6 +303,13 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.WAREHOUSE_COST_ANALYTI
     )
     
     DIMENSIONS (
+        -- SCD Type 2 current-version flag (see AI_SQL_GENERATION note below)
+        WAREHOUSE_METERING.is_current AS WAREHOUSE_METERING."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this WAREHOUSE_METERING record',
+        QUERY_HISTORY.is_current AS QUERY_HISTORY."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this QUERY_HISTORY record',
         -- Warehouse Dimensions
         WAREHOUSE_METERING.warehouse_name AS WAREHOUSE_METERING.WAREHOUSE_NAME
             WITH SYNONYMS ('warehouse', 'compute cluster', 'wh')
@@ -380,7 +403,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.WAREHOUSE_COST_ANALYTI
     )
     
     COMMENT = 'Warehouse compute cost analytics with query-level detail'
-    AI_SQL_GENERATION 'Always filter with "_IS_CURRENT" = TRUE to get current records. Use START_TIME for time-based filtering on warehouse metering or query history. Credits are the unit of cost in Snowflake. WAREHOUSE_SIZE values: X-Small, Small, Medium, Large, X-Large, 2X-Large, etc. EXECUTION_STATUS values: SUCCESS, FAIL, INCIDENT. High bytes_spilled indicates queries that may benefit from a larger warehouse. QUERY_TAG can be used for cost attribution to teams or projects.'
+    AI_SQL_GENERATION 'Always filter with the is_current = TRUE dimension on each table to get current records and avoid double-counting SCD Type 2 history. Use START_TIME for time-based filtering on warehouse metering or query history. Credits are the unit of cost in Snowflake. WAREHOUSE_SIZE values: X-Small, Small, Medium, Large, X-Large, 2X-Large, etc. EXECUTION_STATUS values: SUCCESS, FAIL, INCIDENT. High bytes_spilled indicates queries that may benefit from a larger warehouse. QUERY_TAG can be used for cost attribution to teams or projects.'
     AI_QUESTION_CATEGORIZATION 'This semantic view answers questions about: Warehouse credit consumption and costs, Query execution patterns and performance, Cost attribution by user, role, or query tag, Warehouse sizing recommendations based on spill, Query performance analysis, Which users or roles are consuming the most credits.';
 
 
@@ -412,6 +435,13 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.SECURITY_ANALYTICS
     )
     
     DIMENSIONS (
+        -- SCD Type 2 current-version flag (see AI_SQL_GENERATION note below)
+        LOGIN_HISTORY.is_current AS LOGIN_HISTORY."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this LOGIN_HISTORY record',
+        USERS.is_current AS USERS."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this USERS record',
         LOGIN_HISTORY.login_user AS LOGIN_HISTORY.USER_NAME
             WITH SYNONYMS ('user', 'login user', 'who logged in')
             COMMENT = 'Username attempting login',
@@ -478,7 +508,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.SECURITY_ANALYTICS
     )
     
     COMMENT = 'Security analytics for login monitoring and access auditing'
-    AI_SQL_GENERATION 'Always filter with "_IS_CURRENT" = TRUE to get current records. IS_SUCCESS contains YES or NO as string values. Use EVENT_TIMESTAMP for time-based filtering on logins. REPORTED_CLIENT_TYPE values: SNOWFLAKE_UI, JDBC_DRIVER, ODBC_DRIVER, PYTHON_DRIVER, etc. FIRST_AUTHENTICATION_FACTOR values: PASSWORD, OAUTH, KEYPAIR_USER, etc. Look for multiple failed logins from the same IP to detect potential attacks.'
+    AI_SQL_GENERATION 'Always filter with the is_current = TRUE dimension on each table to get current records and avoid double-counting SCD Type 2 history. IS_SUCCESS contains YES or NO as string values. Use EVENT_TIMESTAMP for time-based filtering on logins. REPORTED_CLIENT_TYPE values: SNOWFLAKE_UI, JDBC_DRIVER, ODBC_DRIVER, PYTHON_DRIVER, etc. FIRST_AUTHENTICATION_FACTOR values: PASSWORD, OAUTH, KEYPAIR_USER, etc. Look for multiple failed logins from the same IP to detect potential attacks.'
     AI_QUESTION_CATEGORIZATION 'This semantic view answers questions about: Login attempts and authentication events, Failed login patterns and security risks, User account status and MFA adoption, Login patterns by IP address or client type, Detecting potential brute force attacks.';
 
 
@@ -499,7 +529,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.STORAGE_ANALYTICS
             WITH SYNONYMS ('database storage', 'db storage', 'database size'),
             
         TABLE_STORAGE AS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.TABLE_STORAGE_METRICS_ARCHIVE
-            PRIMARY KEY (ID, CATALOG_DROPPED)
+            PRIMARY KEY (ID)
             WITH SYNONYMS ('table storage', 'table size', 'table metrics')
     )
     
@@ -534,6 +564,16 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.STORAGE_ANALYTICS
     )
     
     DIMENSIONS (
+        -- SCD Type 2 current-version flag (see AI_SQL_GENERATION note below)
+        STORAGE_USAGE.is_current AS STORAGE_USAGE."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this STORAGE_USAGE record',
+        DATABASE_STORAGE.is_current AS DATABASE_STORAGE."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this DATABASE_STORAGE record',
+        TABLE_STORAGE.is_current AS TABLE_STORAGE."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this TABLE_STORAGE record',
         STORAGE_USAGE.storage_date AS STORAGE_USAGE.USAGE_DATE
             WITH SYNONYMS ('date', 'storage date', 'usage date')
             COMMENT = 'Date of storage measurement',
@@ -582,7 +622,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.STORAGE_ANALYTICS
     )
     
     COMMENT = 'Storage analytics for capacity planning and optimization'
-    AI_SQL_GENERATION 'Always filter with "_IS_CURRENT" = TRUE to get current records. Storage is measured in bytes - divide by POWER(1024,3) for GB or POWER(1024,4) for TB. Use USAGE_DATE for time-based trending. For table-level analysis, join on TABLE_CATALOG = DATABASE_NAME. ACTIVE_BYTES is the current table size, TIME_TRAVEL_BYTES is historical data for recovery.'
+    AI_SQL_GENERATION 'Always filter with the is_current = TRUE dimension on each table to get current records and avoid double-counting SCD Type 2 history. Storage is measured in bytes - divide by POWER(1024,3) for GB or POWER(1024,4) for TB. Use USAGE_DATE for time-based trending. For table-level analysis, join on TABLE_CATALOG = DATABASE_NAME. ACTIVE_BYTES is the current table size, TIME_TRAVEL_BYTES is historical data for recovery.'
     AI_QUESTION_CATEGORIZATION 'This semantic view answers questions about: Storage consumption trends, Database and table size and growth, Capacity planning and forecasting, Time travel and failsafe storage costs, Identifying large tables for optimization.';
 
 
@@ -615,6 +655,16 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.GOVERNANCE_ANALYTICS
     )
     
     DIMENSIONS (
+        -- SCD Type 2 current-version flag (see AI_SQL_GENERATION note below)
+        USERS.is_current AS USERS."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this USERS record',
+        ROLES.is_current AS ROLES."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this ROLES record',
+        GRANTS_TO_USERS.is_current AS GRANTS_TO_USERS."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this GRANTS_TO_USERS record',
         USERS.user_name AS USERS.NAME
             WITH SYNONYMS ('user', 'username', 'user name')
             COMMENT = 'User account name',
@@ -681,7 +731,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.GOVERNANCE_ANALYTICS
     )
     
     COMMENT = 'User and role governance analytics'
-    AI_SQL_GENERATION 'Always filter with "_IS_CURRENT" = TRUE to get current records. DISABLED is stored as a string value. HAS_MFA is a boolean indicating multi-factor authentication status. Use LAST_SUCCESS_LOGIN to find inactive users. Join GRANTS_TO_USERS to see which roles are assigned to which users.'
+    AI_SQL_GENERATION 'Always filter with the is_current = TRUE dimension on each table to get current records and avoid double-counting SCD Type 2 history. DISABLED is stored as a string value. HAS_MFA is a boolean indicating multi-factor authentication status. Use LAST_SUCCESS_LOGIN to find inactive users. Join GRANTS_TO_USERS to see which roles are assigned to which users.'
     AI_QUESTION_CATEGORIZATION 'This semantic view answers questions about: User account management and status, Role assignments and hierarchy, Security posture and MFA adoption, Inactive user identification, Who has access to what roles.';
 
 
@@ -694,7 +744,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.TASK_ANALYTICS
     
     TABLES (
         TASK_HISTORY AS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.TASK_HISTORY_ARCHIVE
-            PRIMARY KEY (QUERY_ID)
+            PRIMARY KEY (RUN_ID, NAME)
             WITH SYNONYMS ('tasks', 'scheduled tasks', 'task runs', 'task executions')
     )
     
@@ -704,6 +754,10 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.TASK_ANALYTICS
     )
     
     DIMENSIONS (
+        -- SCD Type 2 current-version flag (see AI_SQL_GENERATION note below)
+        TASK_HISTORY.is_current AS TASK_HISTORY."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this TASK_HISTORY record',
         TASK_HISTORY.task_name AS TASK_HISTORY.NAME
             WITH SYNONYMS ('task', 'task name', 'job')
             COMMENT = 'Name of the task',
@@ -746,7 +800,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.TASK_ANALYTICS
     )
     
     METRICS (
-        TASK_HISTORY.total_runs AS COUNT(TASK_HISTORY.QUERY_ID)
+        TASK_HISTORY.total_runs AS COUNT(*)
             WITH SYNONYMS ('run count', 'executions')
             COMMENT = 'Total number of task runs',
         TASK_HISTORY.successful_runs AS SUM(CASE WHEN TASK_HISTORY.task_state = 'SUCCEEDED' THEN 1 ELSE 0 END)
@@ -761,7 +815,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.TASK_ANALYTICS
     )
     
     COMMENT = 'Task execution analytics for monitoring scheduled jobs'
-    AI_SQL_GENERATION 'Always filter with "_IS_CURRENT" = TRUE to get current records. STATE values: SUCCEEDED, FAILED, CANCELLED, SKIPPED. Use SCHEDULED_TIME or COMPLETED_TIME for time-based filtering. Tasks with non-null ROOT_TASK_ID are part of a task graph. High ATTEMPT_NUMBER indicates retry patterns.'
+    AI_SQL_GENERATION 'Always filter with the is_current = TRUE dimension on each table to get current records and avoid double-counting SCD Type 2 history. STATE values: SUCCEEDED, FAILED, CANCELLED, SKIPPED. Use SCHEDULED_TIME or COMPLETED_TIME for time-based filtering. Tasks with non-null ROOT_TASK_ID are part of a task graph. High ATTEMPT_NUMBER indicates retry patterns.'
     AI_QUESTION_CATEGORIZATION 'This semantic view answers questions about: Task execution success and failure rates, Which tasks are failing frequently, Task scheduling patterns, Task graph dependencies and root tasks, Error patterns in scheduled jobs.';
 
 
@@ -786,7 +840,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.BCDR_ANALYTICS
             
         -- Table-level metrics for identifying high-priority DR objects
         TABLE_STORAGE AS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.TABLE_STORAGE_METRICS_ARCHIVE
-            PRIMARY KEY (ID, CATALOG_DROPPED)
+            PRIMARY KEY (ID)
             WITH SYNONYMS ('table storage', 'table metrics', 'hot tables', 'DR objects'),
             
         -- Replication usage for RPO monitoring
@@ -796,7 +850,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.BCDR_ANALYTICS
             
         -- Replication groups configuration
         REPLICATION_GROUPS AS TEMPORAL_ARCHIVE.ACCOUNT_USAGE.REPLICATION_GROUPS_ARCHIVE
-            PRIMARY KEY (NAME)
+            PRIMARY KEY (REPLICATION_GROUP_ID)
             WITH SYNONYMS ('failover groups', 'replication groups', 'DR groups')
     )
     
@@ -844,6 +898,22 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.BCDR_ANALYTICS
     )
     
     DIMENSIONS (
+        -- SCD Type 2 current-version flag (see AI_SQL_GENERATION note below)
+        STORAGE_USAGE.is_current AS STORAGE_USAGE."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this STORAGE_USAGE record',
+        DATABASE_STORAGE.is_current AS DATABASE_STORAGE."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this DATABASE_STORAGE record',
+        TABLE_STORAGE.is_current AS TABLE_STORAGE."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this TABLE_STORAGE record',
+        REPLICATION_USAGE.is_current AS REPLICATION_USAGE."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this REPLICATION_USAGE record',
+        REPLICATION_GROUPS.is_current AS REPLICATION_GROUPS."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this REPLICATION_GROUPS record',
         -- Storage Date Dimensions
         STORAGE_USAGE.storage_date AS STORAGE_USAGE.USAGE_DATE
             WITH SYNONYMS ('date', 'usage date', 'storage date')
@@ -959,7 +1029,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.BCDR_ANALYTICS
     )
     
     COMMENT = 'Business Continuity and Disaster Recovery analytics for RPO/RTO monitoring, storage inventory, data churn analysis, and high-priority DR object identification'
-    AI_SQL_GENERATION 'Always filter with "_IS_CURRENT" = TRUE to get current records. Use USAGE_DATE for time-based storage trending. For churn analysis (RTO proxy), compare AVERAGE_FAILSAFE_BYTES to AVERAGE_DATABASE_BYTES - high ratios indicate high data churn requiring more recovery time. High FAILSAFE_BYTES on tables indicates "hot" tables that change frequently and are expensive to replicate. REPLICATION_SCHEDULE determines RPO - more frequent schedules = lower RPO. TIME_TRAVEL_BYTES supports Tier 3 recovery (up to 90 days). FAILSAFE_BYTES supports Tier 4 emergency recovery (7 days after time travel expires). IS_TRANSIENT = true means no fail-safe protection. Calculate churn percentage as (failsafe_bytes / active_bytes) * 100.'
+    AI_SQL_GENERATION 'Always filter with the is_current = TRUE dimension on each table to get current records and avoid double-counting SCD Type 2 history. Use USAGE_DATE for time-based storage trending. For churn analysis (RTO proxy), compare AVERAGE_FAILSAFE_BYTES to AVERAGE_DATABASE_BYTES - high ratios indicate high data churn requiring more recovery time. High FAILSAFE_BYTES on tables indicates "hot" tables that change frequently and are expensive to replicate. REPLICATION_SCHEDULE determines RPO - more frequent schedules = lower RPO. TIME_TRAVEL_BYTES supports Tier 3 recovery (up to 90 days). FAILSAFE_BYTES supports Tier 4 emergency recovery (7 days after time travel expires). IS_TRANSIENT = true means no fail-safe protection. Calculate churn percentage as (failsafe_bytes / active_bytes) * 100.'
     AI_QUESTION_CATEGORIZATION 'This semantic view answers questions about: Storage inventory and baseline for DR planning, Recovery Point Objective (RPO) via replication lag, Recovery Time Objective (RTO) via data churn analysis, Identifying high-priority DR objects (hot tables), Business Impact Analysis data for tiering, Storage growth trends for capacity planning, Comparing active vs failsafe vs time travel storage, Which tables have the highest churn, Replication costs and frequency.';
 
 
@@ -1002,6 +1072,13 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.COST_ANALYTICS
     )
     
     DIMENSIONS (
+        -- SCD Type 2 current-version flag (see AI_SQL_GENERATION note below)
+        METERING_DAILY.is_current AS METERING_DAILY."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this METERING_DAILY record',
+        WAREHOUSE_METERING.is_current AS WAREHOUSE_METERING."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this WAREHOUSE_METERING record',
         -- Daily Metering Dimensions
         METERING_DAILY.service_type AS METERING_DAILY.SERVICE_TYPE
             WITH SYNONYMS ('service', 'feature', 'product', 'cost category')
@@ -1044,7 +1121,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.COST_ANALYTICS
     )
     
     COMMENT = 'General cost analytics combining daily metering with warehouse usage'
-    AI_SQL_GENERATION 'Always filter with "_IS_CURRENT" = TRUE to get current records. SERVICE_TYPE values include: WAREHOUSE_METERING, AUTO_CLUSTERING, MATERIALIZED_VIEW, PIPE, REPLICATION, QUERY_ACCELERATION, SERVERLESS_TASK, SEARCH_OPTIMIZATION. Use USAGE_DATE for daily trend analysis. Credits are the unit of cost - multiply by your contract rate for dollar amounts. For month-over-month comparisons, group by DATE_TRUNC(month, USAGE_DATE).'
+    AI_SQL_GENERATION 'Always filter with the is_current = TRUE dimension on each table to get current records and avoid double-counting SCD Type 2 history. SERVICE_TYPE values include: WAREHOUSE_METERING, AUTO_CLUSTERING, MATERIALIZED_VIEW, PIPE, REPLICATION, QUERY_ACCELERATION, SERVERLESS_TASK, SEARCH_OPTIMIZATION. Use USAGE_DATE for daily trend analysis. Credits are the unit of cost - multiply by your contract rate for dollar amounts. For month-over-month comparisons, group by DATE_TRUNC(month, USAGE_DATE).'
     AI_QUESTION_CATEGORIZATION 'This semantic view answers questions about: Overall credit consumption and trends, Cost breakdown by service type, Daily/weekly/monthly cost analysis, Comparing costs across different Snowflake features, General cost overview before drilling into specifics.';
 
 
@@ -1174,6 +1251,13 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.QUERY_PERFORMANCE_ANAL
     )
     
     DIMENSIONS (
+        -- SCD Type 2 current-version flag (see AI_SQL_GENERATION note below)
+        QUERY_HISTORY.is_current AS QUERY_HISTORY."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this QUERY_HISTORY record',
+        ACCESS_HISTORY.is_current AS ACCESS_HISTORY."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this ACCESS_HISTORY record',
         -- Query Identifiers
         QUERY_HISTORY.query_id AS QUERY_HISTORY.QUERY_ID
             WITH SYNONYMS ('query identifier', 'id')
@@ -1391,7 +1475,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.QUERY_PERFORMANCE_ANAL
     
     COMMENT = 'Comprehensive query performance analytics with table-level access patterns, user attribution, and alerting metrics for identifying long-running queries, high scan percentages, memory pressure, and capacity constraints'
     
-    AI_SQL_GENERATION 'Always filter with "_IS_CURRENT" = TRUE to get current records. Use START_TIME for time-based filtering. 
+    AI_SQL_GENERATION 'Always filter with the is_current = TRUE dimension on each table to get current records and avoid double-counting SCD Type 2 history. Use START_TIME for time-based filtering. 
 
 ALERTING THRESHOLDS:
 - Long-running queries: TOTAL_ELAPSED_TIME > 300000 (5 minutes in ms)
@@ -1518,6 +1602,22 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.ORGANIZATION_ANALYTICS
     )
     
     DIMENSIONS (
+        -- SCD Type 2 current-version flag (see AI_SQL_GENERATION note below)
+        USAGE_CURRENCY.is_current AS USAGE_CURRENCY."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this USAGE_CURRENCY record',
+        REMAINING_BALANCE.is_current AS REMAINING_BALANCE."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this REMAINING_BALANCE record',
+        METERING_DAILY.is_current AS METERING_DAILY."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this METERING_DAILY record',
+        WAREHOUSE_METERING.is_current AS WAREHOUSE_METERING."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this WAREHOUSE_METERING record',
+        ACCOUNTS.is_current AS ACCOUNTS."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current', 'latest version')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this ACCOUNTS record',
         -- Account Dimensions (from ACCOUNTS table)
         ACCOUNTS.account_name AS ACCOUNTS.ACCOUNT_NAME
             WITH SYNONYMS ('account', 'snowflake account', 'acct')
@@ -1663,7 +1763,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.ORGANIZATION_ANALYTICS
     )
     
     COMMENT = 'Organization-level analytics for cross-account cost comparison, contract balance tracking, and currency-denominated spending across all Snowflake accounts in the organization'
-    AI_SQL_GENERATION 'Always filter with "_IS_CURRENT" = TRUE to get current records. Use USAGE_DATE or DATE for time-based filtering. USAGE_IN_CURRENCY is the actual dollar amount — use this for real cost analysis. CREDITS_USED is the credit consumption before currency conversion. CAPACITY_BALANCE tracks remaining prepaid credits — when it approaches zero, overage charges begin on ON_DEMAND_CONSUMPTION_BALANCE. To compare accounts, GROUP BY ACCOUNT_NAME. To see cost trends, GROUP BY DATE_TRUNC(month, USAGE_DATE). SERVICE_TYPE values include: WAREHOUSE_METERING, AUTO_CLUSTERING, SERVERLESS_TASK, MATERIALIZED_VIEW, PIPE, SEARCH_OPTIMIZATION. EDITION values: STANDARD, ENTERPRISE, BUSINESS_CRITICAL. For contract burn rate, calculate daily capacity decrease over time. The ACCOUNTS table links all cost data to account metadata (region, edition, admin status).'
+    AI_SQL_GENERATION 'Always filter with the is_current = TRUE dimension on each table to get current records and avoid double-counting SCD Type 2 history. Use USAGE_DATE or DATE for time-based filtering. USAGE_IN_CURRENCY is the actual dollar amount — use this for real cost analysis. CREDITS_USED is the credit consumption before currency conversion. CAPACITY_BALANCE tracks remaining prepaid credits — when it approaches zero, overage charges begin on ON_DEMAND_CONSUMPTION_BALANCE. To compare accounts, GROUP BY ACCOUNT_NAME. To see cost trends, GROUP BY DATE_TRUNC(month, USAGE_DATE). SERVICE_TYPE values include: WAREHOUSE_METERING, AUTO_CLUSTERING, SERVERLESS_TASK, MATERIALIZED_VIEW, PIPE, SEARCH_OPTIMIZATION. EDITION values: STANDARD, ENTERPRISE, BUSINESS_CRITICAL. For contract burn rate, calculate daily capacity decrease over time. The ACCOUNTS table links all cost data to account metadata (region, edition, admin status).'
     AI_QUESTION_CATEGORIZATION 'This semantic view answers questions about: Cross-account cost comparison (which accounts cost the most?), Currency-denominated spending (actual dollar amounts, not just credits), Contract balance tracking and burn rate, Capacity remaining and overage monitoring, Per-account warehouse costs, Organization-wide credit consumption trends, Account inventory and metadata (region, edition, locked status), Cost breakdown by service type across accounts, Monthly and daily spending trends across the organization.';
 
 

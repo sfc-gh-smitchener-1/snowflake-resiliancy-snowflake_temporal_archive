@@ -13,28 +13,16 @@
 -- =============================================================================
 USE ROLE {{ADMIN_ROLE}};
 USE DATABASE {{DATABASE_NAME}};
-USE WAREHOUSE {{DATABASE_NAME}}_WH;
+USE WAREHOUSE {{WAREHOUSE_NAME}};
 
 -- =============================================================================
 -- ENSURE ARCHIVE SCHEMA EXISTS (for LOAD_LOG reference)
 -- =============================================================================
+-- LOAD_LOG itself is created by 02_scd_load.sql with the full RUN_ID / LOAD_STRATEGY
+-- schema. This script only needs the schema to exist to create views against it.
 
 CREATE SCHEMA IF NOT EXISTS {{DATABASE_NAME}}.ARCHIVE
     COMMENT = 'Archive control tables and procedures';
-
-CREATE TABLE IF NOT EXISTS {{DATABASE_NAME}}.ARCHIVE.LOAD_LOG (
-    LOG_ID                  NUMBER AUTOINCREMENT,
-    SOURCE_TABLE            VARCHAR(512),
-    TARGET_TABLE            VARCHAR(512),
-    ROWS_UPDATED            NUMBER,
-    ROWS_INSERTED           NUMBER,
-    STATUS                  VARCHAR(50),
-    ERROR_MESSAGE           VARCHAR(4096),
-    DURATION_SECONDS        NUMBER,
-    LOAD_TIMESTAMP          TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
-    "_ROW_HASH"             VARCHAR(64)
-)
-COMMENT = 'Log of SCD load executions';
 
 -- =============================================================================
 -- CREATE STREAMLIT SCHEMA AND STAGE

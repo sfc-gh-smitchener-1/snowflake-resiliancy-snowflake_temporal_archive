@@ -11,7 +11,7 @@ In this quickstart, you will deploy a complete **Temporal Archive** solution tha
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  TEMPORAL_ARCHIVE Database                                              │
-│  ├── 107 Active SCD Type 2 Archive Tables (7+ year retention via SCD) │
+│  ├── 181 Active SCD Type 2 Archive Tables (7+ year retention via SCD) │
 │  ├── 10 Semantic Views (AI-ready for Cortex Analyst)                    │
 │  ├── Automated Load Tasks (6 AM & 6 PM daily)                           │
 │  └── [Optional] WORM Backup Policy (Business Critical Edition only)     │
@@ -235,7 +235,7 @@ Deploy Temporal Archive to my account
 
 This deploys with default settings:
 - Database: `TEMPORAL_ARCHIVE`
-- Warehouse: `TEMPORAL_ARCHIVE_WH` (X-Small)
+- Warehouse: `TEMPORAL_ARCHIVE_WH` (LARGE Standard Gen2)
 - Scheduled loads: 6 AM and 6 PM Eastern
 
 #### Deploy with Custom Settings
@@ -257,8 +257,8 @@ The Temporal Archive skill automatically:
 | Step | What It Does |
 |------|--------------|
 | 1 | Creates database, warehouse, and roles |
-| 2 | Creates 4 schemas (ARCHIVE, ACCOUNT_USAGE, ORGANIZATION_USAGE, SEMANTIC) |
-| 3 | Registers 133 ACCOUNT_USAGE views for archiving (107 active) |
+| 2 | Creates 5 schemas (ARCHIVE, ACCOUNT_USAGE, ORGANIZATION_USAGE, DATA_SHARING_USAGE, READER_ACCOUNT_USAGE) via 01_initial_setup.sql; SEMANTIC and STREAMLIT schemas are added by later steps |
+| 3 | Registers 212 ACCOUNT_USAGE & ORGANIZATION_USAGE views for archiving (181 active) |
 | 4 | Creates SCD Type 2 load procedures |
 | 5 | Deploys 10 semantic views for Cortex Analyst |
 | 6 | Creates scheduled tasks (morning + evening loads) |
@@ -273,12 +273,12 @@ Cortex Code shows real-time progress as it executes each step. You'll see output
 ✓ Created database TEMPORAL_ARCHIVE
 ✓ Created warehouse TEMPORAL_ARCHIVE_WH
 ✓ Created roles (DATA_ADMIN, TEMPORAL_ARCHIVE_READER, TEMPORAL_ARCHIVE_WRITER)
-✓ Created VIEW_REGISTRY with 133 source views (107 active)
+✓ Created VIEW_REGISTRY with 212 source views (181 active)
 ✓ Created SCD Type 2 procedures
 ✓ Created 10 semantic views
 ✓ Created scheduled tasks
 ✓ Running initial data load...
-✓ Loaded 107 active archive tables
+✓ Loaded 181 active archive tables
 ✓ Deployment complete!
 ```
 
@@ -398,7 +398,7 @@ CREATE DATABASE IF NOT EXISTS TEMPORAL_ARCHIVE
     COMMENT = 'Snowflake Temporal Archive - SCD Type 2 history with 7+ year retention';
 
 -- Create a dedicated warehouse
--- LARGE Gen2 recommended for production (107 active views, 3-strategy delta load)
+-- LARGE Gen2 recommended for production (181 active views, 3-strategy delta load)
 -- Use SMALL for quickstart/testing with smaller subsets
 CREATE WAREHOUSE IF NOT EXISTS TEMPORAL_ARCHIVE_WH
     WAREHOUSE_SIZE = 'LARGE'
@@ -458,7 +458,7 @@ CREATE SCHEMA IF NOT EXISTS TEMPORAL_ARCHIVE.SEMANTIC
     COMMENT = 'Native Snowflake Semantic Views for Cortex Analyst';
 ```
 
-**✅ Checkpoint**: Run `SHOW SCHEMAS IN DATABASE TEMPORAL_ARCHIVE;` — you should see 4 schemas.
+**✅ Checkpoint**: Run `SHOW SCHEMAS IN DATABASE TEMPORAL_ARCHIVE;` — you should see 4 schemas (this simplified tutorial path creates ARCHIVE, ACCOUNT_USAGE, ORGANIZATION_USAGE, SEMANTIC directly; the full skill/01_initial_setup.sql path creates 5: ARCHIVE, ACCOUNT_USAGE, ORGANIZATION_USAGE, DATA_SHARING_USAGE, READER_ACCOUNT_USAGE, with SEMANTIC added by a later step).
 
 ---
 
@@ -812,6 +812,13 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.QUERY_PERFORMANCE_ANAL
     )
     
     DIMENSIONS (
+        -- SCD Type 2 current-version flag - always filter on these
+        QUERY_HISTORY.is_current AS QUERY_HISTORY."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this query record',
+        ACCESS_HISTORY.is_current AS ACCESS_HISTORY."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this access record',
         -- Query Identifiers
         QUERY_HISTORY.query_id AS QUERY_HISTORY.QUERY_ID
             WITH SYNONYMS ('query identifier', 'id')
@@ -897,7 +904,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.QUERY_PERFORMANCE_ANAL
     
     COMMENT = 'Query performance analytics with user/table attribution and alerting metrics'
     
-    AI_SQL_GENERATION 'Always filter with "_IS_CURRENT" = TRUE to get current records.
+    AI_SQL_GENERATION 'Always filter with the is_current = TRUE dimension on each table to get current records.
 
 ALERTING THRESHOLDS:
 - Long-running: TOTAL_ELAPSED_TIME > 300000 (5 minutes in ms)
@@ -949,6 +956,13 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.COST_ANALYTICS
     )
     
     DIMENSIONS (
+        -- SCD Type 2 current-version flag - always filter on these
+        WAREHOUSE_METERING.is_current AS WAREHOUSE_METERING."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this record',
+        METERING_DAILY.is_current AS METERING_DAILY."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this record',
         WAREHOUSE_METERING.warehouse_name AS WAREHOUSE_METERING.WAREHOUSE_NAME
             WITH SYNONYMS ('warehouse', 'compute')
             COMMENT = 'Virtual warehouse name',
@@ -974,7 +988,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.COST_ANALYTICS
     
     COMMENT = 'Cost analytics for warehouse compute and daily metering'
     
-    AI_SQL_GENERATION 'Filter with "_IS_CURRENT" = TRUE. Use START_TIME for time filtering.'
+    AI_SQL_GENERATION 'Always filter with the is_current = TRUE dimension on each table. Use START_TIME for time filtering.'
     
     AI_QUESTION_CATEGORIZATION 'Answers questions about warehouse costs, credit consumption, and spending trends';
 ```
@@ -997,6 +1011,9 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.SECURITY_ANALYTICS
     )
     
     DIMENSIONS (
+        LOGIN_HISTORY.is_current AS LOGIN_HISTORY."_IS_CURRENT"
+            WITH SYNONYMS ('current', 'is current')
+            COMMENT = 'TRUE if this is the current SCD Type 2 version of this record',
         LOGIN_HISTORY.event_id AS LOGIN_HISTORY.EVENT_ID
             WITH SYNONYMS ('login id')
             COMMENT = 'Unique login event identifier',
@@ -1043,7 +1060,7 @@ CREATE OR REPLACE SEMANTIC VIEW TEMPORAL_ARCHIVE.SEMANTIC.SECURITY_ANALYTICS
     
     COMMENT = 'Security analytics for login monitoring and access auditing'
     
-    AI_SQL_GENERATION 'Filter with "_IS_CURRENT" = TRUE. Use EVENT_TIMESTAMP for time filtering. IS_SUCCESS = ''YES'' for successful logins, ''NO'' for failures.'
+    AI_SQL_GENERATION 'Filter with is_current = TRUE. Use EVENT_TIMESTAMP for time filtering. IS_SUCCESS = ''YES'' for successful logins, ''NO'' for failures.'
     
     AI_QUESTION_CATEGORIZATION 'Answers questions about login attempts, failed logins, authentication methods, MFA adoption, and user access patterns';
 ```
@@ -1509,9 +1526,11 @@ When querying archive tables, remember these columns:
 |--------|---------|
 | `_IS_CURRENT` | TRUE = current record, FALSE = historical |
 | `_VALID_FROM` | When this version became active |
-| `_VALID_TO` | When this version was superseded (NULL = current) |
+| `_VALID_TO` | When this version was superseded (NULL = current, in this tutorial's simplified procedure) |
 | `_ROW_HASH` | SHA-256 hash for change detection |
 | `_LOADED_AT` | When the record was loaded |
+
+> **Note**: This tutorial's simplified `LOAD_VIEW_ARCHIVE` procedure uses `NULL` in `_VALID_TO` for current records. The full production procedure in `sql/02_scd_load.sql` (used by the Cortex Code skill deployment path) instead uses the sentinel value `'9999-12-31 23:59:59'` so that `_VALID_TO` is always comparable with `>` / `<` in range queries without needing `OR _VALID_TO IS NULL`. Match your queries to whichever procedure you actually deployed.
 
 ### Point-in-Time Query Example
 

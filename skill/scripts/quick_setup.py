@@ -22,7 +22,7 @@ from typing import Dict, Any
 DEFAULTS = {
     'database_name': 'TEMPORAL_ARCHIVE',
     'warehouse_name': 'TEMPORAL_ARCHIVE_WH',
-    'warehouse_size': 'XSMALL',
+    'warehouse_size': 'LARGE',
     'warehouse_auto_suspend': '60',
     'warehouse_min_clusters': '1',
     'warehouse_max_clusters': '1',

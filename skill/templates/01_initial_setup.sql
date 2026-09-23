@@ -40,6 +40,7 @@ CREATE DATABASE IF NOT EXISTS {{DATABASE_NAME}}
 CREATE WAREHOUSE IF NOT EXISTS {{WAREHOUSE_NAME}}
     WAREHOUSE_SIZE = '{{WAREHOUSE_SIZE}}'
     WAREHOUSE_TYPE = 'STANDARD'
+    GENERATION = '2'
     AUTO_SUSPEND = {{WAREHOUSE_AUTO_SUSPEND}}
     AUTO_RESUME = TRUE
     MIN_CLUSTER_COUNT = {{WAREHOUSE_MIN_CLUSTERS}}
@@ -139,28 +140,9 @@ GRANT ROLE {{WRITER_ROLE}} TO ROLE {{ARCHIVE_ADMIN_ROLE}};
 
 
 -- =============================================================================
--- CREATE LOGGING TABLE
+-- NOTE: LOAD_LOG is created by 02_scd_load.sql (run as {{ADMIN_ROLE}}), not here.
+-- Keeping it in a single place avoids inconsistent schemas for the same table.
 -- =============================================================================
-
-CREATE TABLE IF NOT EXISTS {{DATABASE_NAME}}.{{ARCHIVE_SCHEMA}}.LOAD_LOG (
-    LOG_ID              NUMBER AUTOINCREMENT,
-    LOAD_TIMESTAMP      TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
-    SOURCE_TABLE        VARCHAR(256),
-    TARGET_TABLE        VARCHAR(256),
-    ROWS_UPDATED        NUMBER,
-    ROWS_INSERTED       NUMBER,
-    STATUS              VARCHAR(50),
-    ERROR_MESSAGE       VARCHAR(16777216),
-    DURATION_SECONDS    NUMBER(10,2),
-    "_LOADED_AT"        TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
-    "_SOURCE_SYSTEM"    VARCHAR(100) DEFAULT '{{DATABASE_NAME}}',
-    "_SOURCE_TABLE"     VARCHAR(100) DEFAULT 'LOAD_LOG',
-    "_ROW_HASH"         VARCHAR(64),
-    "_IS_CURRENT"       BOOLEAN DEFAULT TRUE,
-    "_VALID_FROM"       TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
-    "_VALID_TO"         VARCHAR(50) DEFAULT '9999-12-31 23:59:59'
-)
-COMMENT = 'Audit log of all SCD load operations. Ref: https://docs.snowflake.com/en/user-guide/backups';
 
 
 -- =============================================================================
