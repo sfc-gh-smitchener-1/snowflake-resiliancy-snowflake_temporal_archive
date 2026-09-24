@@ -23,10 +23,12 @@ skill/
 ├── SKILL.md                    # Main entry point (loaded by Cortex Code)
 ├── config.template.yaml        # All configurable parameters
 ├── templates/                  # Parameterized SQL templates
-│   ├── 01_initial_setup.sql    # Database, warehouse, roles, backup policy
+│   ├── 01_initial_setup.sql    # Database, warehouse, roles
+│   ├── 01b_backup_policy.sql   # OPTIONAL WORM backup policy (manual, never automatic)
 │   ├── 02_scd_load.sql         # VIEW_REGISTRY, SCD procedures, tasks
 │   ├── 03_semantic_layer.sql    # 10 semantic views
 │   ├── 04_streamlit_ddl.sql    # Streamlit support objects
+│   ├── 06_cleanup.sql          # Full teardown
 │   └── agent_config.json       # Cortex Agent specification
 └── scripts/
     ├── deploy.py               # Full deployment automation
@@ -171,15 +173,9 @@ SCHEDULE = 'USING CRON 0 * * * * America/New_York'
 backup_retention_days: 365  # 1 year instead of 7
 ```
 
-### Disable Backup Policy
+### Backup Policy
 
-Set retention to 0 in config:
-
-```yaml
-backup_retention_days: 0
-```
-
-Or comment out the backup policy section in `01_initial_setup.sql`.
+The WORM backup policy is **optional and never created automatically** - it is a separate manual step (`01b_backup_policy.sql` / `deploy.py --step 01b_backup_policy`). To enable it, set `features.create_backup_policy: true` in config.yaml AND run the 01b step explicitly. Do not enable it on demo or trial accounts: the retention lock is irreversible once a scheduled backup has run (see `06_cleanup.sql`).
 
 ## Troubleshooting
 

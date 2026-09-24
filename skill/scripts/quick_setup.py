@@ -76,6 +76,7 @@ def get_template_vars(config: Dict[str, Any]) -> Dict[str, str]:
         '{{SEMANTIC_SCHEMA}}': config['semantic_schema'],
         '{{STREAMLIT_SCHEMA}}': config['streamlit_schema'],
         '{{BACKUP_POLICY_NAME}}': backup_policy,
+        '{{BACKUP_SET_NAME}}': config.get('backup_set_name', f"{config['database_name']}_BACKUPS"),
         '{{BACKUP_RETENTION_DAYS}}': str(config['backup_retention_days']),
         '{{BACKUP_SCHEDULE_MINUTES}}': str(config['backup_schedule_minutes']),
         '{{MORNING_LOAD_HOUR}}': str(config['morning_load_hour']),
@@ -141,7 +142,7 @@ def main():
     parser.add_argument('--config', '-c', help='Path to config.yaml')
     parser.add_argument('--defaults', '-d', action='store_true', help='Use all defaults')
     parser.add_argument('--output', '-o', help='Output directory for generated SQL')
-    parser.add_argument('--step', choices=['01', '02', '03', '04', 'all'], default='all',
+    parser.add_argument('--step', choices=['01', '01b', '02', '03', '04', 'all'], default='all',
                        help='Which step to generate (01=setup, 02=scd, 03=semantic, 04=streamlit)')
     
     args = parser.parse_args()
@@ -182,8 +183,10 @@ def main():
     output_dir = Path(args.output) if args.output else script_dir / 'generated'
     output_dir.mkdir(exist_ok=True)
     
-    # Steps to generate
-    steps = ['01', '02', '03', '04'] if args.step == 'all' else [args.step]
+    # Steps to generate. 01b (optional WORM backup policy) is generated for
+    # reference but is NOT part of the default run order - it must be run
+    # manually and is never created automatically.
+    steps = ['01', '01b', '02', '03', '04'] if args.step == 'all' else [args.step]
     
     print(f"\nGenerating SQL for database: {config['database_name']}")
     print(f"Output directory: {output_dir}\n")
@@ -233,6 +236,12 @@ def main():
    - {output_dir}/02_scd_load.sql       (as {config['admin_role']})
    - {output_dir}/03_semantic_layer.sql (as {config['admin_role']})
    - {output_dir}/04_streamlit_ddl.sql  (as {config['admin_role']})
+
+   OPTIONAL - WORM BACKUP POLICY (NOT run automatically):
+   - {output_dir}/01b_backup_policy.sql (as ACCOUNTADMIN, Business Critical
+     Edition only). The retention lock is IRREVERSIBLE once a scheduled
+     backup has run - do NOT run this on demo/trial accounts. See
+     06_cleanup.sql for removal steps and limitations.
 
 2. Create the Cortex Agent using the REST API:
    - Config file: {output_dir}/agent_config.json

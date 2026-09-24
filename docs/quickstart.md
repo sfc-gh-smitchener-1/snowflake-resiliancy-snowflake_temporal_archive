@@ -1289,6 +1289,8 @@ GRANT USAGE ON WAREHOUSE TEMPORAL_ARCHIVE_WH TO ROLE TEMPORAL_ARCHIVE_READER;
 ## Step 8: WORM-Compliant Backup Policy (Optional - Business Critical Edition)
 
 > **Important**: This step requires **Business Critical Edition** or higher. Retention lock and legal holds are not available on Standard or Enterprise editions. To check your edition, run: `SELECT CURRENT_ACCOUNT(), SYSTEM$GET_SNOWFLAKE_PLATFORM_INFO();`
+>
+> **Note**: The deployment scripts NEVER create the WORM backup policy automatically - it is opt-in only. A ready-to-run version of this step is provided at `sql/01b_backup_policy.sql` (run it manually as ACCOUNTADMIN). The walkthrough below builds the same objects step by step and explains the concepts.
 
 ### Understanding Snowflake Backups
 
@@ -1546,12 +1548,23 @@ WHERE "_VALID_FROM" <= '2024-06-15'::TIMESTAMP
 
 ## Cleanup (Optional)
 
-To remove all Temporal Archive objects:
+To remove all Temporal Archive objects, run **`sql/06_cleanup.sql`** as ACCOUNTADMIN. It suspends the SCD load tasks, removes the backup set and WORM backup policy, drops the database, warehouse, and roles, in the correct order:
 
 ```sql
 USE ROLE ACCOUNTADMIN;
 
--- Drop the database (this removes all tables, views, procedures)
+-- Suspend SCD load tasks (dropped with the database below)
+ALTER TASK TEMPORAL_ARCHIVE.ARCHIVE.TASK_SCD_LOAD_MORNING SUSPEND;
+ALTER TASK TEMPORAL_ARCHIVE.ARCHIVE.TASK_SCD_LOAD_EVENING SUSPEND;
+
+-- Remove backup objects FIRST - the policy lives in the database, and the
+-- backup set references both. Order matters.
+ALTER BACKUP SET TEMPORAL_ARCHIVE_BACKUPS SUSPEND BACKUP POLICY;
+DROP BACKUP SET IF EXISTS TEMPORAL_ARCHIVE_BACKUPS;
+DROP BACKUP POLICY IF EXISTS TEMPORAL_ARCHIVE.ARCHIVE.TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY;
+
+-- Drop the database (this removes all tables, views, procedures, semantic
+-- views, tasks, and the Cortex agent)
 DROP DATABASE IF EXISTS TEMPORAL_ARCHIVE;
 
 -- Drop the warehouse
@@ -1561,8 +1574,10 @@ DROP WAREHOUSE IF EXISTS TEMPORAL_ARCHIVE_WH;
 DROP ROLE IF EXISTS TEMPORAL_ARCHIVE_READER;
 DROP ROLE IF EXISTS TEMPORAL_ARCHIVE_WRITER;
 DROP ROLE IF EXISTS TEMPORAL_ARCHIVE_ADMIN;
-DROP ROLE IF EXISTS DATA_ADMIN;
+DROP ROLE IF EXISTS DATA_ADMIN;  -- review first: other solutions may use this role
 ```
+
+> **WARNING - WORM retention lock:** the retention-locked backup policy is **optional and never created automatically** — it only exists if you manually ran `sql/01b_backup_policy.sql` (or set `features.create_backup_policy: true` AND ran `deploy.py --step 01b_backup_policy`). Once a scheduled backup has run, the retention-locked backup set **cannot be dropped — even by ACCOUNTADMIN** — and the database cannot be dropped until every backup expires (up to 7 years with the default policy). Do not enable it on demo or trial accounts; if you need backups without the WORM lock, remove `WITH RETENTION LOCK` and use a short retention period.
 
 ---
 

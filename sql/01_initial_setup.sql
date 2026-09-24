@@ -162,23 +162,14 @@ GRANT ALL ON FUTURE SCHEMAS IN DATABASE TEMPORAL_ARCHIVE TO ROLE TEMPORAL_ARCHIV
 
 
 -- =============================================================================
--- CREATE BACKUP POLICY (REQUIRES BUSINESS CRITICAL EDITION)
+-- WORM BACKUP POLICY - NOT CREATED BY THIS SCRIPT
 -- =============================================================================
--- WORM-compliant backup policy with 7-year retention
--- Note: RETENTION LOCK requires Business Critical Edition or higher
--- Reference: https://docs.snowflake.com/en/user-guide/backups
--- =============================================================================
-
-CREATE BACKUP POLICY IF NOT EXISTS TEMPORAL_ARCHIVE.ARCHIVE.TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY
-    WITH RETENTION LOCK
-    SCHEDULE = '1440 MINUTE'
-    EXPIRE_AFTER_DAYS = 2555
-    COMMENT = 'WORM-compliant backup policy with 7-year retention for SEC 17a-4, HIPAA, FINRA compliance';
-
--- Apply backup policy to database
-ALTER DATABASE TEMPORAL_ARCHIVE 
-    SET BACKUP_POLICY = TEMPORAL_ARCHIVE.ARCHIVE.TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY;
-
+-- The retention-locked WORM backup policy is OPTIONAL and is never created
+-- automatically. Once a scheduled backup has run, the retention-locked backup
+-- set CANNOT be deleted - even by ACCOUNTADMIN - until every backup expires
+-- (7 years with the default policy). See 06_cleanup.sql for details.
+--
+-- To enable it, run sql/01b_backup_policy.sql MANUALLY after this script.
 
 -- =============================================================================
 -- VERIFICATION

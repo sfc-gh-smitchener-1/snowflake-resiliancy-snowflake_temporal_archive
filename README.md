@@ -1,7 +1,7 @@
 
 ![Snowflake Temporal Archive](TempArchive.png)
 
-**Preserve your Snowflake ACCOUNT_USAGE history beyond the native 365-day limit with SCD Type 2 archiving and WORM-compliant backups.**
+**Preserve your Snowflake ACCOUNT_USAGE history beyond the native 365-day limit with SCD Type 2 archiving and optional WORM-compliant backups.**
 
 ## What This Does
 
@@ -9,7 +9,7 @@
 |---------|-------------|
 | **Extended Retention** | Archive 212 ACCOUNT_USAGE & ORGANIZATION_USAGE views (181 active) with 7+ year history (vs 1 year native) |
 | **SCD Type 2 History** | Track every change with full audit trail and point-in-time queries |
-| **WORM Compliance** | Immutable backups with RETENTION LOCK for SEC 17a-4, HIPAA, FINRA |
+| **WORM Compliance** | Optional immutable backups with RETENTION LOCK for SEC 17a-4, HIPAA, FINRA (never created automatically) |
 | **AI-Ready Analytics** | 10 semantic views + Cortex Intelligence Agent for natural language queries |
 | **Self-Service Deployment** | Cortex Code skill for parameterized deployment to any account |
 
@@ -66,7 +66,7 @@ SNOWFLAKE.ORGANIZATION_USAGE (5 active views)
 │       ├── WATERMARK_STATE (delta load tracking)         │
 │       └── LOAD_LOG (per-view detail + summary rows)     │
 │                                                         │
-│  + WORM Backup Policy (7-year retention, immutable)     │
+│  + Optional WORM Backup Policy (01b, never auto-created) │
 │  + Clustering Keys (7 largest tables)                   │
 │  + Schema Evolution (auto-detect new source columns)    │
 └─────────────────────────────────────────────────────────┘
@@ -80,7 +80,7 @@ SNOWFLAKE.ORGANIZATION_USAGE (5 active views)
 | Semantic Views | 10 | Cost, security, storage, governance, tasks, BC/DR, query performance, organization analytics |
 | Cortex Agent | 1 | SNOWFLAKEACCOUNTARCHIVE with 10 tools for natural language queries |
 | Scheduled Tasks | 2 | Morning (6 AM) and evening (6 PM) SCD loads |
-| Backup Policy | 1 | WORM-compliant with 7-year retention |
+| Backup Policy | 0-1 | OPTIONAL WORM-compliant with 7-year retention (manual `01b_backup_policy.sql`; never created automatically) |
 
 ## Semantic Views
 
@@ -116,11 +116,13 @@ SNOWFLAKE.ORGANIZATION_USAGE (5 active views)
 
 ```
 ├── sql/                        # Deployment SQL scripts
-│   ├── 01_initial_setup.sql    # Database, warehouse, roles, backup policy
+│   ├── 01_initial_setup.sql    # Database, warehouse, roles
+│   ├── 01b_backup_policy.sql   # OPTIONAL WORM backup policy (manual, never automatic)
 │   ├── 02_scd_load.sql         # SCD procedures and scheduled tasks
 │   ├── 03_semantic_layer.sql   # 10 semantic views for Cortex Analyst
 │   ├── 04_streamlit_ddl.sql    # Streamlit support objects
-│   └── 05_streamlit_app.sql    # Streamlit app deployment
+│   ├── 05_streamlit_app.sql    # Streamlit app deployment
+│   └── 06_cleanup.sql          # Full teardown (tasks, backups, DB, warehouse, roles)
 ├── skill/                      # Cortex Code skill for self-service deployment
 │   ├── SKILL.md                # Skill entry point
 │   ├── config.template.yaml    # Configuration parameters
@@ -148,14 +150,14 @@ SNOWFLAKE.ORGANIZATION_USAGE (5 active views)
 
 ## Requirements
 
-- **Snowflake Edition**: Business Critical or higher (for RETENTION LOCK)
+- **Snowflake Edition**: Any (Business Critical or higher only if you opt into the WORM retention-lock backup policy)
 - **Role**: ACCOUNTADMIN for initial setup
 - **Features**: Cortex Analyst and Cortex Agents enabled
 
 ## Key Design Principles
 
-1. **Native Execution** - All operations run within Snowflake (Tasks + Backup Policy)
-2. **Immutability First** - WORM backup policy ensures audit compliance
+1. **Native Execution** - All operations run within Snowflake (Tasks + optional Backup Policy)
+2. **Immutability First** - SCD Type 2 history is append-only; the WORM backup policy is opt-in for audit compliance (never created automatically - see `sql/01b_backup_policy.sql`)
 3. **3-Strategy Delta Loading** - APPEND_ONLY (watermark), SOFT_DELETE_MUTABLE (temp table SCD2), FULL_COMPARE (hash fallback)
 4. **Hash-Based CDC** - Deterministic change detection via `SHA2(TO_JSON(OBJECT_CONSTRUCT(*)), 256)`
 5. **Schema Evolution** - Auto-detect and add new columns when Snowflake updates ACCOUNT_USAGE views

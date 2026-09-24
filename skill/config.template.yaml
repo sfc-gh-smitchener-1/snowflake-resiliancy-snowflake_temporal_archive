@@ -33,13 +33,18 @@ semantic_schema: SEMANTIC                 # Semantic views for Cortex Analyst + 
 streamlit_schema: STREAMLIT               # Streamlit app objects
 
 # =============================================================================
-# BACKUP POLICY (WORM Compliance)
+# BACKUP POLICY (OPTIONAL - WORM Compliance)
 # =============================================================================
+# The WORM backup policy is NEVER created automatically. To enable it:
+#   1. Set features.create_backup_policy: true below, AND
+#   2. Run sql/01b_backup_policy.sql manually (or deploy.py --step 01b_backup_policy).
+# Applying a retention-locked policy to a backup set is IRREVERSIBLE: once a
+# scheduled backup has run, the backup set and database cannot be dropped
+# until every backup expires.
 backup_policy_name: TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY
+backup_set_name: TEMPORAL_ARCHIVE_BACKUPS        # Backup set that attaches the policy to the database
 backup_retention_days: 2555               # 7 years for regulatory compliance
 backup_schedule_minutes: 1440             # Daily backups (24 hours = 1440 minutes)
-# Note: WORM retention lock cannot be disabled once set. 
-# Set retention_days: 0 to disable backup policy creation.
 
 # =============================================================================
 # TASK SCHEDULING
@@ -89,7 +94,10 @@ archive_sources:
 # OPTIONAL FEATURES
 # =============================================================================
 features:
-  create_backup_policy: true              # Create WORM backup policy
+  create_backup_policy: false             # OPTIONAL WORM backup policy - NEVER created automatically.
+                                         # Must be enabled here AND the 01b_backup_policy.sql script
+                                         # run manually. IRREVERSIBLE retention lock (7 years) - leave
+                                         # false for demo/trial accounts.
   create_semantic_views: true             # Create Cortex Analyst semantic views
   create_agent: true                      # Create Cortex Intelligence Agent
   create_streamlit_objects: true          # Create Streamlit support objects

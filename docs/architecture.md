@@ -58,10 +58,10 @@ Detailed technical architecture of the Snowflake Temporal Archive solution.
     │  └────────────────────────────────────────────────────────────┘   │
     │                                                                   │
     │  ┌────────────────────────────────────────────────────────────┐   │
-    │  │ Backup Policy (WORM)                                       │   │
-    │  │ • TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY                      │   │
+    │  │ Backup Policy (WORM) - OPTIONAL, never created automatically│  │
+    │  │ • TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY (01b_backup_policy.sql)│  │
     │  │ • 7-year retention (2555 days)                             │   │
-    │  │ • RETENTION LOCK (immutable)                               │   │
+    │  │ • RETENTION LOCK (immutable once a backup has run)         │   │
     │  │ • Daily backups (1440 minutes)                             │   │
     │  └────────────────────────────────────────────────────────────┘   │
     │                                                                   │
@@ -228,11 +228,11 @@ CREATE SEMANTIC VIEW WAREHOUSE_COST_ANALYTICS
 
 ### WORM Compliance
 
-The backup policy ensures regulatory compliance:
+The WORM backup policy is **optional and never created automatically**. To enable it, run `sql/01b_backup_policy.sql` manually (Business Critical Edition required for the retention lock):
 
 ```sql
 CREATE BACKUP POLICY TEMPORAL_ARCHIVE_WORM_BACKUP_POLICY
-    WITH RETENTION LOCK        -- Cannot be disabled
+    WITH RETENTION LOCK        -- Irreversible once a scheduled backup has run
     SCHEDULE = '1440 MINUTE'   -- Daily backups
     EXPIRE_AFTER_DAYS = 2555   -- 7 years
 ```

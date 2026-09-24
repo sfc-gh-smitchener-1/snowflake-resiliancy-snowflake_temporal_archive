@@ -174,24 +174,16 @@ GRANT SELECT ON FUTURE SEMANTIC VIEWS IN SCHEMA {{DATABASE_NAME}}.{{SEMANTIC_SCH
 
 
 -- =============================================================================
--- CREATE BACKUP POLICY (REQUIRES BUSINESS CRITICAL EDITION)
+-- WORM BACKUP POLICY - NOT CREATED BY THIS SCRIPT
 -- =============================================================================
--- WORM-compliant backup policy with configurable retention
--- Note: RETENTION LOCK requires Business Critical Edition or higher
--- Reference: https://docs.snowflake.com/en/user-guide/backups
--- Set BACKUP_RETENTION_DAYS to 0 to skip backup policy creation
--- =============================================================================
-
-CREATE BACKUP POLICY IF NOT EXISTS {{DATABASE_NAME}}.{{ARCHIVE_SCHEMA}}.{{BACKUP_POLICY_NAME}}
-    WITH RETENTION LOCK
-    SCHEDULE = '{{BACKUP_SCHEDULE_MINUTES}} MINUTE'
-    EXPIRE_AFTER_DAYS = {{BACKUP_RETENTION_DAYS}}
-    COMMENT = 'WORM-compliant backup policy with {{BACKUP_RETENTION_DAYS}}-day retention for SEC 17a-4, HIPAA, FINRA compliance';
-
--- Apply backup policy to database
-ALTER DATABASE {{DATABASE_NAME}} 
-    SET BACKUP_POLICY = {{DATABASE_NAME}}.{{ARCHIVE_SCHEMA}}.{{BACKUP_POLICY_NAME}};
-
+-- The retention-locked WORM backup policy is OPTIONAL and is never created
+-- automatically (features.create_backup_policy must be explicitly set to true,
+-- and even then only in the manual 01b_backup_policy.sql script). Once a
+-- scheduled backup has run, the retention-locked backup set CANNOT be
+-- deleted - even by ACCOUNTADMIN - until every backup expires
+-- ({{BACKUP_RETENTION_DAYS}} days with the default policy). See 06_cleanup.sql.
+--
+-- To enable it, run 01b_backup_policy.sql MANUALLY after this script.
 
 -- =============================================================================
 -- VERIFICATION

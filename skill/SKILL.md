@@ -45,7 +45,7 @@ Deploy Temporal Archive with database name MY_ARCHIVE and warehouse MY_WH
 | `warehouse_name` | TEMPORAL_ARCHIVE_WH | Warehouse name |
 | `warehouse_size` | LARGE | Warehouse size, Gen2 (recommended for production; use SMALL/MEDIUM for lighter workloads) |
 | `admin_role` | DATA_ADMIN | Primary admin role |
-| `backup_retention_days` | 2555 | Backup retention (7 years default) |
+| `backup_retention_days` | 2555 | Backup retention (7 years default; only used if the optional WORM policy is enabled) |
 | `morning_load_hour` | 6 | Morning SCD load hour (local timezone) |
 | `evening_load_hour` | 18 | Evening SCD load hour (local timezone) |
 | `timezone` | America/New_York | Timezone for scheduled tasks |
@@ -63,7 +63,9 @@ I'll help you deploy the Temporal Archive. Let me gather a few configuration det
 1. **Database Name** - Where to create the archive (default: TEMPORAL_ARCHIVE)
 2. **Warehouse Name** - Compute warehouse (default: TEMPORAL_ARCHIVE_WH)  
 3. **Snowflake Connection** - Which connection to use (default: default)
-4. **Retention Period** - How long to retain backups (default: 7 years / 2555 days)
+4. **WORM Backups** - Only if the user explicitly needs regulatory immutable
+   backups (default: NO - the retention lock is irreversible and the policy
+   is never created automatically; if requested, use 01b_backup_policy.sql)
 
 Would you like to use defaults or customize these settings?
 ```

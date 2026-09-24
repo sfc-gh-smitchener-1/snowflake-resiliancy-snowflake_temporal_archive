@@ -35,7 +35,8 @@ class TemporalArchiveDeployer:
     
     # Deployment steps in order
     STEPS = [
-        ("01_initial_setup", "Infrastructure Setup (database, warehouse, roles, backup policy)"),
+        ("01_initial_setup", "Infrastructure Setup (database, warehouse, roles)"),
+        ("01b_backup_policy", "OPTIONAL WORM Backup Policy (only runs if features.create_backup_policy is true; IRREVERSIBLE retention lock)"),
         ("02_scd_load", "SCD Type 2 Load Infrastructure (procedures, tasks)"),
         ("03_semantic_layer", "Semantic Views for Cortex Analyst"),
         ("04_streamlit_ddl", "Streamlit Support Objects"),
@@ -48,7 +49,7 @@ class TemporalArchiveDeployer:
         self.dry_run = dry_run
         self.config: Dict[str, Any] = {}
         self.conn = None
-        self.base_dir = Path(__file__).parent.parent
+        self.base_dir = Path(__file__).parent.parent.parent  # repo root
         
     def load_config(self) -> Dict[str, Any]:
         """Load configuration from YAML file."""
@@ -122,6 +123,7 @@ class TemporalArchiveDeployer:
             '{{SEMANTIC_SCHEMA}}': self.config['semantic_schema'],
             '{{STREAMLIT_SCHEMA}}': self.config['streamlit_schema'],
             '{{BACKUP_POLICY_NAME}}': self.config['backup_policy_name'],
+            '{{BACKUP_SET_NAME}}': self.config.get('backup_set_name', f"{self.config['database_name']}_BACKUPS"),
             '{{BACKUP_RETENTION_DAYS}}': str(self.config['backup_retention_days']),
             '{{BACKUP_SCHEDULE_MINUTES}}': str(self.config['backup_schedule_minutes']),
             '{{MORNING_LOAD_HOUR}}': str(self.config['morning_load_hour']),
@@ -261,6 +263,8 @@ class TemporalArchiveDeployer:
         try:
             if step_name == "01_initial_setup":
                 return self._deploy_initial_setup()
+            elif step_name == "01b_backup_policy":
+                return self._deploy_backup_policy()
             elif step_name == "02_scd_load":
                 return self._deploy_scd_load()
             elif step_name == "03_semantic_layer":
@@ -284,6 +288,19 @@ class TemporalArchiveDeployer:
         print("✓ Infrastructure deployed")
         return True
     
+    def _deploy_backup_policy(self) -> bool:
+        """Deploy the OPTIONAL WORM backup policy.
+
+        Never runs automatically during deploy_all unless
+        features.create_backup_policy is explicitly true. The retention
+        lock is IRREVERSIBLE once a scheduled backup has run.
+        """
+        sql = self.read_sql_template("01b_backup_policy.sql")
+        rendered = self.render_template(sql)
+        self.execute_sql(rendered, "WORM Backup Policy (OPTIONAL)")
+        print("✓ WORM backup policy deployed - IRREVERSIBLE once a scheduled backup has run")
+        return True
+
     def _deploy_scd_load(self) -> bool:
         """Deploy SCD Type 2 load infrastructure."""
         sql = self.read_sql_template("02_scd_load.sql")
@@ -366,6 +383,11 @@ class TemporalArchiveDeployer:
         
         for step_name, description in self.STEPS:
             # Check if step should be skipped based on features
+            # The WORM backup policy is NEVER created automatically - it must be
+            # explicitly enabled with features.create_backup_policy: true.
+            if step_name == "01b_backup_policy" and not features.get('create_backup_policy', False):
+                print(f"\nSkipping {step_name} (WORM backup policy is optional and not enabled)")
+                continue
             if step_name == "03_semantic_layer" and not features.get('create_semantic_views', True):
                 print(f"\nSkipping {step_name} (disabled in config)")
                 continue
